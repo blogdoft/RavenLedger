@@ -186,7 +186,7 @@
       same "printed page" as the copyright notice for easier
       identification within third-party archives.
 
-   Copyright [yyyy] [name of copyright owner]
+   Copyright 2025 Francisco Thiago de Almeida
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -199,3 +199,15 @@
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+Commons Clause License Condition v1.0
+
+The Software is provided under the Apache 2.0 License, except for the following restriction:
+
+You may not sell the Software. For the purposes of this license, “sell” means
+practicing any or all of the rights granted to you under the Apache 2.0 License
+to provide the Software or any modified version of the Software to third parties
+as a product or service whose value derives primarily from the Software itself.
+
+This restriction does not limit the use of the Software as a component of a
+separate, larger product, nor does it restrict the sale of such larger products.
