@@ -1,0 +1,79 @@
+{
+    "$schema": "https://json.schemastore.org/claude-code-settings.json",
+    "permissions": {
+        "allow": [
+            "Edit(*)",
+            "Write(*)",
+            "NotebookEdit(*)",
+            "Bash",
+            "WebFetch(domain:*)",
+            "WebSearch",
+            "mcp__*",
+            "mcp__ide__*",
+            "mcp__chrome-devtools__*",
+            "mcp__claude-in-chrome__*",
+            "mcp__playwright__*",
+            "mcp__reddit-mcp-server__search_reddit",
+            "mcp__reddit-mcp-server__get_post_details",
+            "mcp__tavily-web-search__tavily_search",
+            "mcp__tavily-web-search__tavily_extract",
+            "WebFetch(domain:api.open-meteo.com)",
+            "WebFetch(domain:raw.githubusercontent.com)",
+            "WebFetch(domain:docs.anthropic.com)",
+            "WebFetch(domain:support.claude.com)",
+            "WebFetch(domain:github.com)",
+            "WebFetch(domain:api.github.com)",
+            "WebFetch(domain:json.schemastore.org)",
+            "WebFetch(domain:claudelog.com)",
+            "WebFetch(domain:www.eesel.ai)",
+            "WebFetch(domain:shipyard.build)"
+        ],
+        "deny": [],
+        "ask": [
+            "Bash(rm *)",
+            "Bash(rmdir *)",
+            "Bash(shred *)",
+            "Bash(unlink *)",
+            "Bash(dd *)",
+            "Bash(mkfs *)",
+            "Bash(fdisk *)",
+            "Bash(chmod *)",
+            "Bash(chown *)",
+            "Bash(git *)",
+            "Bash(gh *)",
+            "Bash(npm *)",
+            "Bash(pip *)",
+            "Bash(pip3 *)",
+            "Bash(yarn *)",
+            "Bash(pnpm *)",
+            "Bash(docker *)",
+            "Bash(kubectl *)",
+            "Bash(firebase *)",
+            "Bash(gcloud *)",
+            "Bash(wget *)",
+            "Bash(kill *)",
+            "Bash(killall *)",
+            "Bash(pkill *)"
+        ]
+    },
+    "spinnerVerbs": {
+        "mode": "replace",
+        "verbs": [
+            "Tchô vê aqui",
+            "Calma! Tô pensando aqui",
+            "Tô conferindo tudo aqui",
+            "Pensando bem",
+            "Tô perguntando pra minha mãe",
+            "Já te falo. Tô pensando"
+        ]
+    },
+    "plansDirectory": "./reports",
+    "outputStyle": "Explanatory",
+    "spinnerTipsEnabled": true,
+    "respectGitignore": true,
+    "env": {
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "80"
+    },
+    "enableAllProjectMcpServers": true,
+    "disableAllHooks": false
+}
