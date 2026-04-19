@@ -1,0 +1,35 @@
+{
+    "specversion" : "1.0.1",
+    "type" : "AuditEvent",
+    "source" : "https://www.example.com/",
+    "id" : "app-domain-key",
+    "time" : "2020-04-05T17:31:00Z",
+    "contenttype" : "application/json",
+    "data" : {
+        "appInfo" : {
+            "appname" : "example-app",
+            "domain" : "sales",
+            "version" : "1.0.0"
+        },
+        "user" : {
+            "id" : "12345",
+            "name" : "John Doe",
+            "role": "admin"
+        },
+        "operation" : {
+            "type" : "insert",
+            "entity" : "users",
+            "generatedAt" : "2020-04-05T17:30:00Z",
+            "transmittedAt" : "2020-04-05T17:31:00Z"
+        },
+        "index": {
+            "indexField1": "value1",
+            "indexField2": "value2"
+        },
+        "data" : {
+            "id" : "12345",
+            "name" : "John Doe",
+            "email" : "mail@to.com"
+        }
+    }
+}
