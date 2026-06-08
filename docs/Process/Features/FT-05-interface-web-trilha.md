@@ -1,160 +1,160 @@
-# [FEATURE] FT-05 — Interface Web para Visualização da Trilha de Auditoria
+# [FEATURE] FT-05 — Web Interface for Audit Trail Visualization
 
-## Descrição
+## Description
 
-**Wave 1 — MVP | Lean Inception: Trilha de Auditoria (UX)**
+**Wave 1 — MVP | Lean Inception: Audit Trail (UX)**
 
-Esta feature implementa a aplicação Web (Angular) que permite a Letícia (compliance) e De Marco (perito judicial) consultarem a trilha de auditoria diretamente pelo browser, sem necessidade de acesso ao banco de dados ou conhecimento técnico de APIs. A interface prioriza clareza e funcionalidade sobre estética — o objetivo do MVP é viabilizar investigações reais.
+This feature implements the Web application (Angular) that allows Letícia (compliance) and De Marco (judicial expert) to query the audit trail directly from the browser, without the need for database access or technical API knowledge. The interface prioritizes clarity and functionality over aesthetics — the MVP goal is to enable real investigations.
 
-O MVP Canvas define "via browser" como plataforma de ambas as personas, mas a Lean Inception atribui apenas ❤️ (1 coração) de UX para Trilha de Auditoria — sinalizado que uma interface funcional é suficiente; polimento visual pode vir em iterações posteriores.
+The MVP Canvas defines "via browser" as the platform for both personas, but the Lean Inception assigns only ❤️ (1 heart) of UX for Audit Trail — signaling that a functional interface is sufficient; visual polish can come in later iterations.
 
-**Cenários de negócio:**
-- **Happy path:** Letícia acessa a aplicação, filtra registros por entidade e período, visualiza a lista e abre o detalhe de um registro suspeito.
-- **Sem resultados:** Filtros aplicados não encontram dados → mensagem clara "Nenhum registro encontrado para os filtros selecionados."
-- **Detalhe do registro:** Clique em um registro → visualização completa incluindo o snapshot `data` do payload original.
-- **Erro de API:** Serviço `raven-ledger.api` indisponível → mensagem de erro amigável, sem tela em branco.
+**Business scenarios:**
+- **Happy path:** Letícia accesses the application, filters records by entity and period, views the list, and opens the detail of a suspicious record.
+- **No results:** Applied filters find no data → clear message "No records found for the selected filters."
+- **Record detail:** Click on a record → full view including the `data` snapshot of the original payload.
+- **API error:** `raven-ledger.api` service unavailable → friendly error message, no blank screen.
 
-## Descrição Técnica
+## Technical Description
 
-**Aplicação:** Angular standalone, sem backend próprio. Consome exclusivamente `raven-ledger.api`.
+**Application:** Standalone Angular, no own backend. Consumes exclusively `raven-ledger.api`.
 
-**Telas:**
+**Screens:**
 
-**1. Tela de Listagem (`/audit-entries`)**
-- Formulário de filtros: `entity`, `domain`, `user_id`, `operation` (select), `correlationId`, `from` (datepicker), `to` (datepicker)
-- Tabela de resultados com colunas: `entity`, `domain`, `userName`, `operationType`, `generatedAt`, `receivedAt`
-- Paginação (next/prev) sincronizada com parâmetros da query
-- Botão de limpar filtros
-- Estado de carregamento (skeleton ou spinner)
-- Estado vazio com mensagem descritiva
+**1. Listing screen (`/audit-entries`)**
+- Filter form: `entity`, `domain`, `user_id`, `operation` (select), `correlationId`, `from` (datepicker), `to` (datepicker)
+- Results table with columns: `entity`, `domain`, `userName`, `operationType`, `generatedAt`, `receivedAt`
+- Pagination (next/prev) synchronized with query parameters
+- Clear filters button
+- Loading state (skeleton or spinner)
+- Empty state with descriptive message
 
-**2. Tela de Detalhe (`/audit-entries/:id`)**
-- Todos os campos do registro: metadados CloudEvent + campos de auditoria
-- Exibição do campo `data` (snapshot da entidade) formatado como JSON com syntax highlight
-- Botão "Voltar para listagem" que preserva filtros anteriores
-- 404 exibido de forma amigável se ID não encontrado
+**2. Detail screen (`/audit-entries/:id`)**
+- All record fields: CloudEvent metadata + audit fields
+- Display of the `data` field (entity snapshot) formatted as JSON with syntax highlighting
+- "Back to listing" button that preserves previous filters
+- 404 displayed in a friendly way if ID not found
 
-**Integração com API:**
-- Consome `GET /api/v1/audit-entries` com filtros mapeados de query params da URL
-- Consome `GET /api/v1/audit-entries/{id}` para detalhe
-- URL da API configurável via variável de ambiente (`RAVEN_API_URL`)
-- Sem autenticação no MVP (self-hosted/local)
+**API integration:**
+- Consumes `GET /api/v1/audit-entries` with filters mapped from URL query params
+- Consumes `GET /api/v1/audit-entries/{id}` for detail
+- API URL configurable via environment variable (`RAVEN_API_URL`)
+- No authentication in MVP (self-hosted/local)
 
-**Responsividade:** Desktop first, mínimo 1280px. Mobile não é requisito do MVP.
+**Responsiveness:** Desktop first, minimum 1280px. Mobile is not an MVP requirement.
 
-**Sem estado de autenticação** no MVP — aplicação acessível diretamente.
+**No authentication state** in MVP — application directly accessible.
 
-## Critérios de Aceite
+## Acceptance Criteria
 
-- [ ] Tela de listagem exibe registros consumindo a API com todos os filtros funcionando
-- [ ] Filtros de `entity`, `domain`, `user_id`, `operation` e período funcionam individualmente e combinados
-- [ ] Paginação funciona: navega entre páginas e exibe total de registros
-- [ ] Tela de detalhe exibe todos os campos do registro incluindo snapshot `data` formatado
-- [ ] Estado vazio exibe mensagem "Nenhum registro encontrado para os filtros selecionados"
-- [ ] Erro de API exibe mensagem amigável (não tela em branco ou erro técnico)
-- [ ] Botão "Voltar" na tela de detalhe preserva filtros da listagem anterior
-- [ ] URL da API configurável via variável de ambiente
-- [ ] Aplicação renderiza corretamente em 1280px de largura
-- [ ] Filtros são refletidos na URL (query params) para permitir compartilhamento de link
-- [ ] Filtro por `correlationId` funciona e retorna apenas os registros da mesma operação distribuída
+- [ ] Listing screen displays records consuming the API with all filters working
+- [ ] Filters for `entity`, `domain`, `user_id`, `operation`, and period work individually and combined
+- [ ] Pagination works: navigates between pages and displays total record count
+- [ ] Detail screen displays all record fields including formatted `data` snapshot
+- [ ] Empty state displays the message "No records found for the selected filters"
+- [ ] API error displays a friendly message (no blank screen or technical error)
+- [ ] "Back" button on the detail screen preserves the previous listing filters
+- [ ] API URL configurable via environment variable
+- [ ] Application renders correctly at 1280px width
+- [ ] Filters are reflected in the URL (query params) to allow link sharing
+- [ ] Filter by `correlationId` works and returns only records from the same distributed operation
 
-## Cenários de Teste
+## Test Scenarios
 
 ```gherkin
-# language: pt
+# language: en
 
 @regression
-Feature: Interface web para visualização da trilha de auditoria
-  Como analista de compliance ou perito judicial
-  Quero consultar a trilha de auditoria pelo navegador
-  Para investigar operações sobre dados sem depender de acesso técnico ao banco
+Feature: Web interface for audit trail visualization
+  As a compliance analyst or judicial expert
+  I want to query the audit trail from the browser
+  So that I can investigate data operations without relying on technical database access
 
   Background:
-    Given que a aplicação web está acessível no navegador
-    And que o serviço raven-ledger.api está operacional com registros disponíveis
+    Given the web application is accessible in the browser
+    And the raven-ledger.api service is operational with available records
 
-  # AC-1: Listagem com registros
+  # AC-1: Listing with records
   @happy-path @ac-1
-  Scenario: Listagem exibe registros com as colunas esperadas
-    Given que o LedgerDatabase contém registros de auditoria
-    When o analista acessa a tela de listagem
-    Then a tabela exibe os registros com as colunas entity, domain, userName, operationType, generatedAt e receivedAt
+  Scenario: Listing displays records with the expected columns
+    Given LedgerDatabase contains audit records
+    When the analyst accesses the listing screen
+    Then the table displays the records with the columns entity, domain, userName, operationType, generatedAt, and receivedAt
 
-  # AC-2: Filtro por entidade
+  # AC-2: Filter by entity
   @happy-path @ac-2
-  Scenario: Filtro por entidade atualiza a listagem com apenas os registros correspondentes
-    Given que existem registros para a entidade "users" e para outras entidades
-    When o analista aplica o filtro de entidade com o valor "users"
-    Then a tabela exibe apenas os registros da entidade "users"
+  Scenario: Filter by entity updates the listing with only the matching records
+    Given there are records for entity "users" and for other entities
+    When the analyst applies the entity filter with the value "users"
+    Then the table displays only the records for entity "users"
 
-  # AC-2: Filtro por tipo de operação
+  # AC-2: Filter by operation type
   @happy-path @ac-2
-  Scenario Outline: Filtro por tipo de operação exibe apenas as operações correspondentes
-    Given que existem registros de diferentes tipos de operação
-    When o analista filtra por operação "<operacao>"
-    Then a tabela exibe apenas registros com operação "<operacao>"
+  Scenario Outline: Filter by operation type displays only the matching operations
+    Given there are records of different operation types
+    When the analyst filters by operation "<operation>"
+    Then the table displays only records with operation "<operation>"
 
     Examples:
-      | operacao |
-      | insert   |
-      | update   |
-      | delete   |
+      | operation |
+      | insert    |
+      | update    |
+      | delete    |
 
-  # AC-3: Paginação
+  # AC-3: Pagination
   @happy-path @ac-3
-  Scenario: Paginação navega corretamente entre páginas de resultados
-    Given que existem mais registros do que o tamanho de uma página
-    When o analista navega para a próxima página
-    Then registros diferentes são exibidos e o total de registros permanece apresentado corretamente
+  Scenario: Pagination correctly navigates between pages of results
+    Given there are more records than the size of one page
+    When the analyst navigates to the next page
+    Then different records are displayed and the total record count remains correctly shown
 
-  # AC-4: Detalhe do registro
+  # AC-4: Record detail
   @happy-path @ac-4
-  Scenario: Seleção de registro exibe detalhe completo com snapshot formatado como JSON
-    Given que a listagem exibe registros de auditoria
-    When o analista seleciona um registro específico
-    Then todos os campos do registro são exibidos incluindo o snapshot de dados formatado como JSON
+  Scenario: Selecting a record displays the full detail with snapshot formatted as JSON
+    Given the listing displays audit records
+    When the analyst selects a specific record
+    Then all record fields are displayed including the data snapshot formatted as JSON
 
-  # AC-5: Estado vazio
+  # AC-5: Empty state
   @happy-path @ac-5
-  Scenario: Filtros sem resultado exibem mensagem descritiva ao analista
-    Given que nenhum registro corresponde aos filtros aplicados
-    When o analista aplica os filtros e aguarda a resposta
-    Then a interface exibe a mensagem "Nenhum registro encontrado para os filtros selecionados"
+  Scenario: Filters with no result display a descriptive message to the analyst
+    Given no record matches the applied filters
+    When the analyst applies the filters and waits for the response
+    Then the interface displays the message "No records found for the selected filters"
 
-  # AC-6: Erro de API
+  # AC-6: API error
   @exception @ac-6
-  Scenario: Indisponibilidade da API exibe mensagem amigável sem expor detalhes técnicos
-    Given que o serviço raven-ledger.api está indisponível
-    When o analista acessa ou atualiza a listagem
-    Then a interface exibe uma mensagem de erro amigável sem tela em branco ou informações técnicas
+  Scenario: API unavailability displays a friendly message without exposing technical details
+    Given the raven-ledger.api service is unavailable
+    When the analyst accesses or refreshes the listing
+    Then the interface displays a friendly error message without a blank screen or technical information
 
-  # AC-7: Preservação de filtros ao voltar
+  # AC-7: Filter preservation on back navigation
   @happy-path @ac-7
-  Scenario: Retorno da tela de detalhe preserva os filtros anteriormente aplicados na listagem
-    Given que o analista aplicou filtros na listagem e abriu o detalhe de um registro
-    When o analista retorna para a listagem
-    Then os filtros aplicados anteriormente são preservados
+  Scenario: Returning from the detail screen preserves the previously applied listing filters
+    Given the analyst applied filters in the listing and opened the detail of a record
+    When the analyst returns to the listing
+    Then the previously applied filters are preserved
 
-  # AC-9: Registro inexistente exibe página amigável
+  # AC-9: Non-existent record displays friendly page
   @exception @ac-4
-  Scenario: Acesso a detalhe de registro inexistente exibe mensagem amigável
-    Given que o analista navega para o endereço de detalhe de um registro inexistente
-    When a tela de detalhe tenta carregar o registro
-    Then a interface exibe uma mensagem amigável informando que o registro não foi encontrado
+  Scenario: Accessing the detail of a non-existent record displays a friendly message
+    Given the analyst navigates to the detail address of a non-existent record
+    When the detail screen attempts to load the record
+    Then the interface displays a friendly message informing that the record was not found
 
-  # AC-10: Filtros refletidos na URL
+  # AC-10: Filters reflected in the URL
   @happy-path @ac-10
-  Scenario: Filtros aplicados aparecem na URL para permitir compartilhamento de link
-    Given que o analista aplica filtros de entidade e período na listagem
-    When os filtros são aplicados
-    Then os parâmetros correspondentes aos filtros aparecem na URL da página
+  Scenario: Applied filters appear in the URL to allow link sharing
+    Given the analyst applies entity and period filters in the listing
+    When the filters are applied
+    Then the parameters corresponding to the filters appear in the page URL
 
-  # correlationId: filtro de operação distribuída
+  # correlationId: distributed operation filter
   @happy-path
-  Scenario: Filtro por correlationId exibe apenas registros da mesma operação distribuída
-    Given que existem registros com correlationId "op-7263" e registros com outro correlationId ou sem correlationId
-    When o analista aplica o filtro de correlationId com o valor "op-7263"
-    Then a tabela exibe apenas os registros com correlationId "op-7263"
+  Scenario: Filter by correlationId displays only records from the same distributed operation
+    Given there are records with correlationId "op-7263" and records with a different correlationId or without correlationId
+    When the analyst applies the correlationId filter with the value "op-7263"
+    Then the table displays only the records with correlationId "op-7263"
 ```
 
 ## Priority
@@ -163,8 +163,8 @@ Feature: Interface web para visualização da trilha de auditoria
 
 ## Risk
 
-3 — Baixo. Interface puramente de leitura, sem regras de negócio complexas. Consome API estável (FT-04). Risco maior é de UX, não de dados.
+3 — Low. Purely read-only interface, no complex business rules. Consumes stable API (FT-04). Highest risk is UX, not data.
 
 ## Effort
 
-3 — M
+M

@@ -1,282 +1,282 @@
-# [FEATURE] FT-01 — Infraestrutura Base e Scaffolding dos Repositórios
+# [FEATURE] FT-01 — Base Infrastructure and Repository Scaffolding
 
-## Descrição
+## Description
 
-Esta feature técnica provisiona toda a base necessária para que os serviços do RavenLedger possam operar em ambiente local e para que os repositórios estejam prontos para desenvolvimento com IA (Claude Code). Abrange a criação e inicialização dos quatro repositórios de serviço, o ambiente local completo via Docker Compose — cobrindo todas as dependências da stack definida — e a configuração inicial de análise estática, gestão de segredos e suporte ao Claude Code em cada repositório.
+This technical feature provisions all the necessary foundation for RavenLedger services to operate in a local environment and for repositories to be ready for AI-assisted development (Claude Code). It covers the creation and initialization of the four service repositories, the complete local environment via Docker Compose — covering all defined stack dependencies — and the initial configuration of static analysis, secrets management, and Claude Code support in each repository.
 
-Sem esta feature, nenhum dos outros serviços consegue subir em ambiente local e nenhum repositório possui a estrutura mínima para iniciar o desenvolvimento. Ela é o pré-requisito de todas as demais features do MVP.
+Without this feature, none of the other services can start in a local environment and no repository has the minimum structure to begin development. It is a prerequisite for all other MVP features.
 
-**Cenários de operação:**
-- **Happy path:** `docker compose up` sobe todos os containers; bancos criados automaticamente e vazios; Kafka operacional com tópico criado; KeyCloak e OpenBao acessíveis; stack de observabilidade ativa.
-- **Erro de configuração:** Variável de ambiente ausente → container não sobe com mensagem clara no log; o `.env.template` documenta o nome e o propósito da variável faltante.
-- **Re-execução:** `docker compose up` é idempotente — reexecutar não recria nem corrompe dados existentes.
+**Operation scenarios:**
+- **Happy path:** `docker compose up` starts all containers; databases created automatically and empty; Kafka operational with topic created; KeyCloak and OpenBao accessible; observability stack active.
+- **Configuration error:** Missing environment variable → container fails to start with a clear log message; the `.env.template` documents the name and purpose of the missing variable.
+- **Re-execution:** `docker compose up` is idempotent — re-running does not recreate or corrupt existing data.
 
 ---
 
-## Descrição Técnica
+## Technical Description
 
-### Repositórios a criar
+### Repositories to create
 
-| Repositório | Propósito |
+| Repository | Purpose |
 |---|---|
-| `raven-ledger.infra` | Infraestrutura local: Docker Compose, configurações de ambiente e documentação de setup |
-| `raven-ledger.ingestion` | Serviço de ingestão de eventos de auditoria — scaffolding inicial vazio |
-| `raven-ledger.register` | Serviço de registro e persistência de eventos — scaffolding inicial vazio |
-| `raven-ledger.api` | Serviço de API de consulta — scaffolding inicial vazio |
+| `raven-ledger.infra` | Local infrastructure: Docker Compose, environment configuration, and setup documentation |
+| `raven-ledger.ingestion` | Audit event ingestion service — empty initial scaffolding |
+| `raven-ledger.register` | Event registration and persistence service — empty initial scaffolding |
+| `raven-ledger.api` | Query API service — empty initial scaffolding |
 
 ---
 
-### `raven-ledger.infra` — Ambiente local (Docker Compose)
+### `raven-ledger.infra` — Local environment (Docker Compose)
 
-O `docker-compose.yml` deve cobrir todos os serviços necessários para o ambiente de desenvolvimento local, com healthchecks em todos os containers.
+The `docker-compose.yml` must cover all services required for the local development environment, with healthchecks on all containers.
 
-#### Dependências de aplicação
+#### Application dependencies
 
-| Serviço | Imagem base | Configuração mínima |
+| Service | Base image | Minimum configuration |
 |---|---|---|
-| `postgres-ledger` | PostgreSQL | Banco `LedgerDatabase` criado automaticamente, vazio, sem tabelas |
-| `postgres-config` | PostgreSQL | Banco `RavenConfig` criado automaticamente, vazio, sem tabelas |
-| `kafka` | Apache Kafka (KRaft, sem Zookeeper) | Tópico `audit.events.received` criado automaticamente na inicialização |
-| `keycloak` | KeyCloak | Realm inicial configurado para o RavenLedger; acessível para emissão de tokens de serviço |
-| `openbao` | OpenBao | Modo dev; acessível para leitura de segredos em ambiente local |
+| `postgres-ledger` | PostgreSQL | LedgerDatabase created automatically, empty, no tables |
+| `postgres-config` | PostgreSQL | RavenConfig created automatically, empty, no tables |
+| `kafka` | Apache Kafka (KRaft, without Zookeeper) | Topic `audit.events.received` created automatically on startup |
+| `keycloak` | KeyCloak | Initial realm configured for RavenLedger; accessible for service token issuance |
+| `openbao` | OpenBao | Dev mode; accessible for reading secrets in the local environment |
 
-> Os schemas de cada banco (tabelas, índices, permissões) são responsabilidade de cada serviço via FluentMigrator e serão definidos nas features correspondentes.
+> The schema for each database (tables, indexes, permissions) is the responsibility of each service via FluentMigrator and will be defined in the corresponding features.
 
-#### Stack de observabilidade
+#### Observability stack
 
-| Serviço | Propósito |
+| Service | Purpose |
 |---|---|
-| `grafana-alloy` | Coletor OTLP — recebe métricas, traces e logs dos serviços e encaminha para os backends |
-| `loki` | Armazenamento de logs estruturados em JSON (emitidos via Serilog) |
-| `prometheus` | Armazenamento de séries temporais de métricas |
-| `tempo` | Armazenamento de traces distribuídos |
-| `grafana` | Visualização unificada; datasources Loki, Prometheus e Tempo pré-configurados |
+| `grafana-alloy` | OTLP collector — receives metrics, traces, and logs from services and forwards them to the backends |
+| `loki` | Structured JSON log storage (emitted via Serilog) |
+| `prometheus` | Metrics time-series storage |
+| `tempo` | Distributed traces storage |
+| `grafana` | Unified visualization; Loki, Prometheus, and Tempo datasources pre-configured |
 
-#### Outros artefatos de `raven-ledger.infra`
+#### Other `raven-ledger.infra` artifacts
 
-- `.env.template` — documenta **todas** as variáveis de ambiente necessárias para todos os serviços, com descrição do propósito de cada variável e o container que a consome.
-- `README.md` — instruções de como subir o ambiente local, pré-requisitos e troubleshooting comum.
-- `CLAUDE.md` — instruções do repositório para o Claude Code, cobrindo: propósito do repositório, convenções do projeto, referência ao `docs/Technical Constraints.md` e ao `docs/TechStack.md`.
+- `.env.template` — documents **all** required environment variables for all services, with a description of each variable's purpose and the container that consumes it.
+- `README.md` — instructions on how to start the local environment, prerequisites, and common troubleshooting.
+- `CLAUDE.md` — repository instructions for Claude Code, covering: repository purpose, project conventions, and references to `docs/Technical Constraints.md` and `docs/TechStack.md`.
 
 ---
 
-### Repositórios de serviço — scaffolding inicial
+### Service repositories — initial scaffolding
 
-Cada um dos repositórios de serviço (`.ingestion`, `.register`, `.api`) deve ser inicializado com a estrutura mínima abaixo. **Nenhum código de negócio deve ser escrito nesta feature.**
+Each of the service repositories (`.ingestion`, `.register`, `.api`) must be initialized with the minimum structure below. **No business logic code should be written in this feature.**
 
-#### Estrutura de solução .NET 10
+#### .NET 10 solution structure
 
-Cada repositório recebe uma solução `.sln` vazia com a estrutura de pastas padrão do projeto:
+Each repository receives an empty `.sln` solution with the project's standard folder structure:
 
 ```
 __tests__/
 src/
 ```
 
-#### Análise estática — build-time (StyleCop + Roslynator)
+#### Static analysis — build-time (StyleCop + Roslynator)
 
-- `Directory.Build.props` na raiz do repositório referenciando os pacotes **StyleCop.Analyzers** e **Roslynator.Analyzers** como dependências de análise, aplicadas a todos os projetos da solução.
-- `.editorconfig` com as regras de estilo C# alinhadas às convenções do StyleCop.
-- A build deve quebrar em qualquer violação de análise estática.
+- `Directory.Build.props` at the repository root referencing **StyleCop.Analyzers** and **Roslynator.Analyzers** packages as analysis dependencies, applied to all projects in the solution.
+- `.editorconfig` with C# style rules aligned to StyleCop conventions.
+- The build must fail on any static analysis violation.
 
-#### Gestão de segredos
+#### Secrets management
 
-- `.env.template` com as variáveis de ambiente esperadas pelo serviço (nomes e descrições, sem valores).
-- `.gitignore` incluindo `.env` explicitamente e demais arquivos com segredos.
+- `.env.template` with the environment variables expected by the service (names and descriptions, no values).
+- `.gitignore` explicitly including `.env` and other files with secrets.
 
-#### Pipeline de CI (GitHub Actions)
+#### CI Pipeline (GitHub Actions)
 
-Cada repositório de serviço recebe um arquivo `.github/workflows/ci.yml` como parte do scaffolding. A pipeline é o quality gate obrigatório antes de qualquer merge — nenhum PR pode ser integrado sem que ela passe.
+Each service repository receives a `.github/workflows/ci.yml` file as part of the scaffolding. The pipeline is the mandatory quality gate before any merge — no PR can be integrated without it passing.
 
-**Gatilhos:**
+**Triggers:**
 
-| Evento | Branch alvo | Propósito |
+| Event | Target branch | Purpose |
 |---|---|---|
-| `pull_request` | `develop` | Valida o código antes do merge — bloqueia o PR se a pipeline falhar |
-| `push` | `develop` | Valida o estado integrado após o merge |
+| `pull_request` | `develop` | Validates code before merge — blocks the PR if the pipeline fails |
+| `push` | `develop` | Validates the integrated state after merge |
 
-**Etapas da pipeline (em ordem):**
+**Pipeline stages (in order):**
 
-| Etapa | Ferramenta | Critério de falha |
+| Stage | Tool | Failure criterion |
 |---|---|---|
-| Restore | `dotnet restore` | Dependências não resolvidas |
-| Build | `dotnet build` | Erro de compilação ou violação de StyleCop/Roslynator |
-| Test + Coverage | `dotnet test` + Coverlet | Falha em qualquer teste |
-| SonarQube Analysis | `dotnet sonarscanner` | Quality gate do SonarQube não aprovado |
+| Restore | `dotnet restore` | Unresolved dependencies |
+| Build | `dotnet build` | Compilation error or StyleCop/Roslynator violation |
+| Test + Coverage | `dotnet test` + Coverlet | Any test failure |
+| SonarQube Analysis | `dotnet sonarscanner` | SonarQube quality gate not approved |
 
-> A etapa de SonarQube engloba `begin` (antes do build) e `end` (após os testes), garantindo que a cobertura coletada pelo Coverlet seja enviada para análise.
+> The SonarQube step includes `begin` (before build) and `end` (after tests), ensuring that coverage collected by Coverlet is sent for analysis.
 
-**Secrets necessários no repositório GitHub:**
+**Secrets required in the GitHub repository:**
 
-| Secret | Propósito |
+| Secret | Purpose |
 |---|---|
-| `SONAR_TOKEN` | Token de autenticação para o SonarQube |
-| `SONAR_HOST_URL` | URL do servidor SonarQube (local em dev, instância dedicada em CI) |
+| `SONAR_TOKEN` | SonarQube authentication token |
+| `SONAR_HOST_URL` | SonarQube server URL (local in dev, dedicated instance in CI) |
 
-> Os valores dos secrets devem ser documentados no `.env.template` do repositório, mas nunca versionados.
+> Secret values must be documented in the repository's `.env.template`, but never committed.
 
-#### Suporte ao Claude Code
+#### Claude Code support
 
-- `CLAUDE.md` na raiz do repositório, contendo:
-  - Propósito do serviço (1–2 parágrafos).
-  - Referência explícita ao `docs/Technical Constraints.md` e ao `docs/TechStack.md` do repositório de documentação.
-  - Convenções específicas do serviço que o Claude Code deve respeitar (a serem detalhadas nas features de cada serviço).
+- `CLAUDE.md` at the repository root, containing:
+  - Service purpose (1–2 paragraphs).
+  - Explicit reference to `docs/Technical Constraints.md` and `docs/TechStack.md` from the documentation repository.
+  - Service-specific conventions that Claude Code must follow (to be detailed in each service's features).
 
 ---
 
-## Critérios de Aceite
+## Acceptance Criteria
 
-**Repositórios:**
-- [ ] Repositórios `raven-ledger.infra`, `raven-ledger.ingestion`, `raven-ledger.register` e `raven-ledger.api` criados e inicializados no GitHub
+**Repositories:**
+- [ ] Repositories `raven-ledger.infra`, `raven-ledger.ingestion`, `raven-ledger.register`, and `raven-ledger.api` created and initialized on GitHub
 
-**Ambiente local:**
-- [ ] `docker compose up` sobe sem erros e todos os containers ficam healthy em < 60 segundos
-- [ ] `LedgerDatabase` acessível e vazio (sem tabelas de negócio)
-- [ ] `RavenConfig` acessível e vazio (sem tabelas de negócio)
-- [ ] Kafka operacional com tópico `audit.events.received` criado
-- [ ] KeyCloak acessível e com realm inicial configurado
-- [ ] OpenBao acessível em modo dev
-- [ ] Grafana acessível com datasources Loki, Prometheus e Tempo pré-configurados
-- [ ] SonarQube acessível localmente
-- [ ] `.env.template` documenta todas as variáveis de ambiente necessárias
-- [ ] `README.md` descreve como subir o ambiente local
+**Local environment:**
+- [ ] `docker compose up` starts without errors and all containers become healthy in < 60 seconds
+- [ ] `LedgerDatabase` accessible and empty (no business tables)
+- [ ] `RavenConfig` accessible and empty (no business tables)
+- [ ] Kafka operational with topic `audit.events.received` created
+- [ ] KeyCloak accessible with initial realm configured
+- [ ] OpenBao accessible in dev mode
+- [ ] Grafana accessible with Loki, Prometheus, and Tempo datasources pre-configured
+- [ ] SonarQube locally accessible
+- [ ] `.env.template` documents all required environment variables
+- [ ] `README.md` describes how to start the local environment
 
-**Scaffolding dos serviços:**
-- [ ] Cada repositório de serviço possui solução `.sln` com estrutura `src/` e `tests/`
-- [ ] `Directory.Build.props` com StyleCop e Roslynator configurados — build quebra em violações
-- [ ] `.editorconfig` com regras C# alinhadas ao StyleCop
-- [ ] `sonar-project.properties` configurado para integração com SonarQube no CI
-- [ ] `.env.template` criado em cada repositório de serviço
-- [ ] `.gitignore` inclui `.env` explicitamente em cada repositório
+**Service scaffolding:**
+- [ ] Each service repository has a `.sln` solution with `src/` and `tests/` structure
+- [ ] `Directory.Build.props` with StyleCop and Roslynator configured — build fails on violations
+- [ ] `.editorconfig` with C# rules aligned to StyleCop
+- [ ] `sonar-project.properties` configured for SonarQube integration in CI
+- [ ] `.env.template` created in each service repository
+- [ ] `.gitignore` explicitly includes `.env` in each repository
 
-**Pipeline de CI:**
-- [ ] `.github/workflows/ci.yml` criado em cada repositório de serviço (`.ingestion`, `.register`, `.api`)
-- [ ] Pipeline disparada em `pull_request` para `develop` e em `push` para `develop`
-- [ ] Etapas configuradas na ordem: restore → build → test + coverage → SonarQube analysis
-- [ ] PR bloqueado automaticamente quando a pipeline falha
-- [ ] Secrets `SONAR_TOKEN` e `SONAR_HOST_URL` documentados no `.env.template` de cada repositório
+**CI Pipeline:**
+- [ ] `.github/workflows/ci.yml` created in each service repository (`.ingestion`, `.register`, `.api`)
+- [ ] Pipeline triggered on `pull_request` to `develop` and on `push` to `develop`
+- [ ] Stages configured in order: restore → build → test + coverage → SonarQube analysis
+- [ ] PR automatically blocked when the pipeline fails
+- [ ] Secrets `SONAR_TOKEN` and `SONAR_HOST_URL` documented in each repository's `.env.template`
 
 **Claude Code:**
-- [ ] `CLAUDE.md` criado em todos os quatro repositórios com propósito e referências às restrições do projeto
+- [ ] `CLAUDE.md` created in all four repositories with purpose and references to project constraints
 
 ---
 
-## Cenários de Teste
+## Test Scenarios
 
 ```gherkin
-# language: pt
+# language: en
 
 @regression
-Feature: Infraestrutura base do ambiente local
-  Como desenvolvedor do RavenLedger
-  Quero subir o ambiente local com um único comando
-  Para que todos os serviços possam operar de forma integrada
+Feature: Base local environment infrastructure
+  As a RavenLedger developer
+  I want to start the local environment with a single command
+  So that all services can operate in an integrated manner
 
   Background:
-    Given que todas as variáveis de ambiente obrigatórias estão configuradas
+    Given all required environment variables are configured
 
-  # AC: Ambiente local sobe sem erros e todos os containers ficam healthy
+  # AC: Local environment starts without errors and all containers become healthy
   @happy-path
-  Scenario: Subida do ambiente local a partir do zero
-    Given que nenhum container do RavenLedger está em execução
-    When o ambiente local é iniciado com docker compose up
-    Then todos os containers ficam healthy em menos de 60 segundos
+  Scenario: Local environment startup from scratch
+    Given no RavenLedger container is running
+    When the local environment is started with docker compose up
+    Then all containers become healthy in less than 60 seconds
 
-  # AC: LedgerDatabase acessível e vazio
+  # AC: LedgerDatabase accessible and empty
   @happy-path
-  Scenario: LedgerDatabase criado e acessível sem tabelas de negócio
-    Given que o ambiente local está em execução
-    When uma conexão é estabelecida com o LedgerDatabase
-    Then o banco existe e não contém nenhuma tabela de negócio
+  Scenario: LedgerDatabase created and accessible with no business tables
+    Given the local environment is running
+    When a connection is established with LedgerDatabase
+    Then the database exists and contains no business tables
 
-  # AC: RavenConfig acessível e vazio
+  # AC: RavenConfig accessible and empty
   @happy-path
-  Scenario: RavenConfig criado e acessível sem tabelas de negócio
-    Given que o ambiente local está em execução
-    When uma conexão é estabelecida com o RavenConfig
-    Then o banco existe e não contém nenhuma tabela de negócio
+  Scenario: RavenConfig created and accessible with no business tables
+    Given the local environment is running
+    When a connection is established with RavenConfig
+    Then the database exists and contains no business tables
 
-  # AC: Kafka operacional com tópico criado
+  # AC: Kafka operational with topic created
   @happy-path
-  Scenario: Tópico audit.events.received disponível no Kafka
-    Given que o ambiente local está em execução
-    When uma mensagem é publicada no tópico audit.events.received
-    Then a mensagem está disponível para consumo
+  Scenario: audit.events.received topic available in Kafka
+    Given the local environment is running
+    When a message is published to the audit.events.received topic
+    Then the message is available for consumption
 
-  # AC: KeyCloak acessível
+  # AC: KeyCloak accessible
   @happy-path
-  Scenario: KeyCloak acessível e com realm configurado
-    Given que o ambiente local está em execução
-    When o endpoint de descoberta do KeyCloak é consultado
-    Then o realm do RavenLedger está disponível
+  Scenario: KeyCloak accessible with realm configured
+    Given the local environment is running
+    When the KeyCloak discovery endpoint is queried
+    Then the RavenLedger realm is available
 
-  # AC: Stack de observabilidade operacional
+  # AC: Observability stack operational
   @happy-path
-  Scenario: Grafana acessível com datasources configurados
-    Given que o ambiente local está em execução
-    When o Grafana é acessado
-    Then os datasources Loki, Prometheus e Tempo estão configurados e respondendo
+  Scenario: Grafana accessible with datasources configured
+    Given the local environment is running
+    When Grafana is accessed
+    Then the Loki, Prometheus, and Tempo datasources are configured and responding
 
-  # AC: SonarQube acessível
+  # AC: SonarQube accessible
   @happy-path
-  Scenario: SonarQube acessível para análise local
-    Given que o ambiente local está em execução
-    When o SonarQube é acessado
-    Then a interface está disponível e pronta para receber análises
+  Scenario: SonarQube accessible for local analysis
+    Given the local environment is running
+    When SonarQube is accessed
+    Then the interface is available and ready to receive analyses
 
-  # AC: Variável de ambiente obrigatória ausente impede subida
+  # AC: Missing required environment variable prevents startup
   @exception
-  Scenario: Variável de ambiente obrigatória ausente impede subida do container
-    Given que uma variável de ambiente obrigatória não está configurada
-    When o ambiente local é iniciado
-    Then o container correspondente não sobe
-    And o log exibe mensagem de erro identificando a variável ausente
+  Scenario: Missing required environment variable prevents container startup
+    Given a required environment variable is not configured
+    When the local environment is started
+    Then the corresponding container does not start
+    And the log displays an error message identifying the missing variable
 
-  # AC: Re-execução do ambiente é idempotente
+  # AC: Re-running the environment is idempotent
   @happy-path
-  Scenario: Re-execução do ambiente não corrompe dados existentes
-    Given que o ambiente local já está em execução com dados
-    When o ambiente local é iniciado novamente com docker compose up
-    Then o estado do ambiente permanece inalterado e a inicialização ocorre sem erros
+  Scenario: Re-running the environment does not corrupt existing data
+    Given the local environment is already running with data
+    When the local environment is started again with docker compose up
+    Then the environment state remains unchanged and initialization completes without errors
 
-  # AC: Build quebra em violação de análise estática
+  # AC: Build fails on static analysis violation
   @happy-path
-  Scenario: Build de serviço falha em violação do StyleCop
-    Given que um repositório de serviço está inicializado com StyleCop configurado
-    When um arquivo C# com violação de estilo é adicionado e o build é executado
-    Then o build falha com mensagem identificando a violação
+  Scenario: Service build fails on StyleCop violation
+    Given a service repository is initialized with StyleCop configured
+    When a C# file with a style violation is added and the build is executed
+    Then the build fails with a message identifying the violation
 
-  # AC: Pipeline de CI disparada em pull request para develop
+  # AC: CI pipeline triggered on pull request to develop
   @happy-path
-  Scenario: Pipeline de CI é executada ao abrir pull request para develop
-    Given que um repositório de serviço possui o arquivo .github/workflows/ci.yml configurado
-    And que um pull request é aberto com destino à branch develop
-    When o pull request é submetido
-    Then a pipeline de CI é disparada automaticamente
-    And o resultado da pipeline é exibido como check no pull request
+  Scenario: CI pipeline is triggered when a pull request to develop is opened
+    Given a service repository has the .github/workflows/ci.yml file configured
+    And a pull request is opened targeting the develop branch
+    When the pull request is submitted
+    Then the CI pipeline is triggered automatically
+    And the pipeline result is displayed as a check on the pull request
 
-  # AC: PR bloqueado quando a pipeline falha
+  # AC: PR blocked when pipeline fails
   @exception
-  Scenario: Pull request bloqueado quando a pipeline de CI falha
-    Given que um pull request está aberto com destino à branch develop
-    And que a pipeline de CI falhou em alguma etapa
-    When um revisor tenta aprovar o merge do pull request
-    Then o merge é bloqueado pelo GitHub até que a pipeline passe
+  Scenario: Pull request blocked when the CI pipeline fails
+    Given a pull request is open targeting the develop branch
+    And the CI pipeline failed at some stage
+    When a reviewer attempts to approve the pull request merge
+    Then the merge is blocked by GitHub until the pipeline passes
 
-  # AC: Pipeline executada após merge em develop
+  # AC: Pipeline executed after merge to develop
   @happy-path
-  Scenario: Pipeline de CI executada após merge em develop
-    Given que um pull request foi aprovado e mergeado em develop
-    When o push para develop é registrado
-    Then a pipeline de CI é disparada automaticamente sobre o estado integrado da branch
+  Scenario: CI pipeline executed after merge to develop
+    Given a pull request was approved and merged into develop
+    When the push to develop is registered
+    Then the CI pipeline is triggered automatically on the integrated state of the branch
 
-  # AC: Quality gate do SonarQube integrado à pipeline
+  # AC: SonarQube quality gate integrated into the pipeline
   @happy-path
-  Scenario: Pipeline falha quando o quality gate do SonarQube não é aprovado
-    Given que a pipeline de CI está em execução para um pull request
-    When a etapa de análise do SonarQube detecta violação do quality gate
-    Then a pipeline falha na etapa de SonarQube
-    And o pull request permanece bloqueado para merge
+  Scenario: Pipeline fails when SonarQube quality gate is not approved
+    Given the CI pipeline is running for a pull request
+    When the SonarQube analysis step detects a quality gate violation
+    Then the pipeline fails at the SonarQube step
+    And the pull request remains blocked for merge
 ```
 
 ---
@@ -287,8 +287,8 @@ Feature: Infraestrutura base do ambiente local
 
 ## Risk
 
-3 — Médio. A topologia KRaft do Kafka e a configuração inicial do KeyCloak (realm, client, scopes) são os pontos de maior atenção: erros aqui impactam todas as features subsequentes. Os demais componentes são bem documentados e o risco é baixo.
+2 — Medium. Kafka's KRaft topology and KeyCloak's initial configuration (realm, client, scopes) are the highest attention points: errors here impact all subsequent features. The remaining components are well documented and carry low risk.
 
 ## Effort
 
-3 — M. O docker compose com stack completa (observabilidade + autenticação + segredos) é mais trabalhoso que o setup mínimo original. A configuração do SonarQube local e a inicialização dos quatro repositórios com scaffolding padronizado adicionam volume, mas o trabalho é mecânico e bem documentado.
+L. The docker compose with the full stack (observability + authentication + secrets) is more work than the minimum original setup. Configuring local SonarQube and initializing the four repositories with standardized scaffolding adds volume, but the work is mechanical and well documented.

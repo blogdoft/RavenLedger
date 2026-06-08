@@ -1,29 +1,31 @@
-# [FEATURE] FT-08 — Abertura e Gestão de Investigações
+# [FEATURE] FT-08 — Investigation Opening and Management
 
-## Descrição
+## Description
 
-**Wave 3 | Lean Inception: Abertura de Investigação**
+**Wave 3 | Lean Inception: Investigation Opening**
 
-Esta feature permite a Letícia e De Marco criarem investigações formais dentro do RavenLedger, agrupando registros de auditoria relevantes, adicionando anotações e gerenciando o ciclo de vida do caso investigativo. Uma investigação é o ponto de partida formal de um processo de auditoria — seja para compliance interna ou para instrução de perícia judicial.
+This feature allows Letícia and De Marco to create formal investigations within RavenLedger, grouping relevant audit records, adding annotations, and managing the lifecycle of the investigative case. An investigation is the formal starting point of an audit process — whether for internal compliance or for judicial expert proceedings.
 
-O valor desta feature está em transformar registros dispersos de auditoria em um caso organizado e documentado, com histórico de ações do investigador — atendendo às dores de De Marco ("medo de ter laudo impugnado") e de Letícia ("produzir evidências documentais robustas").
+The value of this feature lies in transforming scattered audit records into an organized and documented case, with a history of investigator actions — addressing De Marco's pain points ("fear of having the report challenged") and Letícia's ("producing robust documentary evidence").
 
-**Cenários de negócio:**
-- **Happy path:** Letícia abre investigação "Auditoria CRM Q1/2024", associa 10 registros relevantes, adiciona anotação explicando o contexto → investigação salva e acessível.
-- **Investigação encerrada:** De Marco finaliza o caso após concluir a análise → status muda para "Encerrada", `closed_at` preenchido, novos registros não podem ser associados.
-- **Reabrir investigação:** Novos registros surgem após encerramento → investigação reaberta para nova análise.
-- **Tentativa de associar registro a investigação fechada:** `409 Conflict` com mensagem explicativa.
-- **Investigação sem registros:** Criação sem associar registros imediatamente é permitida — o investigador pode populá-la ao longo da análise.
+**Business scenarios:**
+- **Happy path:** Letícia opens investigation "CRM Audit Q1/2024", associates 10 relevant records, adds an annotation explaining the context → investigation saved and accessible.
+- **Closed investigation:** De Marco finalizes the case after completing the analysis → status changes to "Closed", `closed_at` filled in, new records cannot be associated.
+- **Reopen investigation:** New records emerge after closure → investigation reopened for new analysis.
+- **Attempt to associate a record with a closed investigation:** `409 Conflict` with explanatory message.
+- **Investigation without records:** Creation without immediately associating records is allowed — the investigator can populate it throughout the analysis.
 
-**Indicadores de sucesso:**
-- Reduzir tempo de organização de evidências de horas para minutos.
-- Aumentar taxa de sucesso jurídico em 10% (hipótese do MVP Canvas).
+**Success indicators:**
+- Reduce evidence organization time from hours to minutes.
+- Increase legal success rate by 10% (MVP Canvas hypothesis).
 
-## Descrição Técnica
+## Technical Description
 
-**Serviço afetado:** `raven-ledger.api` (novos endpoints de escrita) + banco de dados de investigações
+**Affected service:** `raven-ledger.api` (new write endpoints) + investigations database
 
-**Schema de banco de dados** (armazenado no RavenConfig ou banco separado `investigations_db`):
+**Contract:** `docs/systemDesign/investigations-api.openapi.yaml`
+
+**Database schema** (stored in RavenConfig or a separate `investigations_db` database):
 
 ```sql
 CREATE TABLE investigations (
@@ -39,7 +41,7 @@ CREATE TABLE investigations (
 
 CREATE TABLE investigation_entries (
   investigation_id UUID REFERENCES investigations(id),
-  ledger_entry_id  UUID NOT NULL,  -- referência ao ledger_entries
+  ledger_entry_id  UUID NOT NULL,  -- reference to ledger_entries
   added_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   added_by         VARCHAR(255) NOT NULL,
   PRIMARY KEY (investigation_id, ledger_entry_id)
@@ -54,26 +56,26 @@ CREATE TABLE investigation_notes (
 );
 ```
 
-**Endpoints em `raven-ledger.api`:**
+**Endpoints in `raven-ledger.api`:**
 
 ```
 POST   /api/v1/investigations
        Body: { title, description, created_by }
-       → 201 Created com objeto da investigação
+       → 201 Created with the investigation object
 
 GET    /api/v1/investigations
        Query: status (open|closed), page, size
-       → lista paginada
+       → paginated list
 
 GET    /api/v1/investigations/{id}
-       → detalhe com entries associadas e notas
+       → detail with associated entries and notes
 
 POST   /api/v1/investigations/{id}/entries
        Body: { ledger_entry_id, added_by }
-       → 201 se adicionado; 409 se investigação fechada; 404 se ledger_entry não existe
+       → 201 if added; 409 if investigation is closed; 404 if ledger_entry does not exist
 
 DELETE /api/v1/investigations/{id}/entries/{ledger_entry_id}
-       → Remove associação (somente se investigação aberta)
+       → Removes association (only if investigation is open)
 
 POST   /api/v1/investigations/{id}/notes
        Body: { content, created_by }
@@ -81,147 +83,147 @@ POST   /api/v1/investigations/{id}/notes
 
 PATCH  /api/v1/investigations/{id}/status
        Body: { status: "closed" | "open", changed_by }
-       → Atualiza status; registra closed_at e closed_by ao fechar
+       → Updates status; records closed_at and closed_by when closing
 ```
 
-**Validações:**
-- `title` obrigatório e não vazio
-- `created_by` obrigatório (no MVP, string livre — autenticação vem após)
-- Investigação fechada: `POST /entries` retorna `409 Conflict`
-- `ledger_entry_id` deve existir no LedgerDatabase antes de ser associado
+**Validations:**
+- `title` required and non-empty
+- `created_by` required (in MVP, free-form string — authentication comes later)
+- Closed investigation: `POST /entries` returns `409 Conflict`
+- `ledger_entry_id` must exist in LedgerDatabase before being associated
 
-**Interface web — novas telas:**
-- `/investigations` — listagem com filtro por status
-- `/investigations/new` — formulário de criação
-- `/investigations/{id}` — detalhe: lista de entries associadas, notas, botão de fechar/reabrir
-- Botão "Associar registros" abre modal de busca (reutiliza filtros da FT-04/FT-05, incluindo o filtro por `correlationId` — permite localizar todos os registros de uma transação distribuída para incluir como evidências em um único passo)
-- Campo de anotação inline com botão salvar
+**Web interface — new screens:**
+- `/investigations` — listing with status filter
+- `/investigations/new` — creation form
+- `/investigations/{id}` — detail: list of associated entries, notes, close/reopen button
+- "Associate records" button opens a search modal (reuses filters from FT-04/FT-05, including the `correlationId` filter — allows locating all records from a distributed transaction to include as evidence in a single step)
+- Inline annotation field with save button
 
-**Logs estruturados:**
+**Structured logs:**
 - `investigation_created` → `investigation_id`, `title`, `created_by`
 - `investigation_entry_added` → `investigation_id`, `ledger_entry_id`, `added_by`
 - `investigation_closed` → `investigation_id`, `closed_by`
 - `investigation_note_added` → `investigation_id`, `note_id`, `created_by`
 
-## Critérios de Aceite
+## Acceptance Criteria
 
-- [ ] `POST /api/v1/investigations` cria investigação com status "open"
-- [ ] `POST /api/v1/investigations/{id}/entries` associa ledger_entry à investigação aberta
-- [ ] Associar entry a investigação **fechada** retorna `409 Conflict`
-- [ ] `POST /api/v1/investigations/{id}/notes` salva anotação com timestamp e autor
-- [ ] `PATCH /api/v1/investigations/{id}/status` com `"closed"` preenche `closed_at` e `closed_by`
-- [ ] `PATCH` com `"open"` reabre investigação (limpa `closed_at`)
-- [ ] `GET /api/v1/investigations/{id}` retorna investigação com entries e notas associadas
-- [ ] Interface web permite criar, visualizar, associar registros, anotar e fechar investigações
-- [ ] Tentativa de associar `ledger_entry_id` inexistente retorna `404`
-- [ ] Listagem de investigações filtra por status
-- [ ] Modal de busca de registros suporta filtro por `correlationId` para localizar todas as evidências de uma transação distribuída em um único passo
+- [ ] `POST /api/v1/investigations` creates an investigation with status "open"
+- [ ] `POST /api/v1/investigations/{id}/entries` associates a ledger_entry with an open investigation
+- [ ] Associating an entry with a **closed** investigation returns `409 Conflict`
+- [ ] `POST /api/v1/investigations/{id}/notes` saves an annotation with timestamp and author
+- [ ] `PATCH /api/v1/investigations/{id}/status` with `"closed"` fills in `closed_at` and `closed_by`
+- [ ] `PATCH` with `"open"` reopens the investigation (clears `closed_at`)
+- [ ] `GET /api/v1/investigations/{id}` returns the investigation with associated entries and notes
+- [ ] Web interface allows creating, viewing, associating records, annotating, and closing investigations
+- [ ] Attempt to associate a non-existent `ledger_entry_id` returns `404`
+- [ ] Investigation listing filters by status
+- [ ] Record search modal supports filtering by `correlationId` to locate all evidence from a distributed transaction in a single step
 
-## Cenários de Teste
+## Test Scenarios
 
 ```gherkin
-# language: pt
+# language: en
 
 @regression
-Feature: Abertura e gestão de investigações
-  Como analista de compliance ou perito judicial
-  Quero criar e gerenciar investigações formais agrupando registros de auditoria relevantes
-  Para organizar evidências de forma documentada e rastreável
+Feature: Investigation opening and management
+  As a compliance analyst or judicial expert
+  I want to create and manage formal investigations by grouping relevant audit records
+  So that I can organize evidence in a documented and traceable manner
 
   Background:
-    Given que o serviço de investigações está operacional
-    And que existem registros de auditoria disponíveis no LedgerDatabase
+    Given the investigations service is operational
+    And audit records are available in LedgerDatabase
 
-  # AC-1: Criação de investigação com dados válidos
+  # AC-1: Investigation creation with valid data
   @happy-path @ac-1
-  Scenario: Criação de investigação com dados válidos resulta em investigação aberta
-    Given que o perito informa título e seu identificador de autor
-    When o perito solicita a abertura de uma nova investigação
-    Then a investigação é criada com status "aberta" e os dados informados são preservados
+  Scenario: Investigation creation with valid data results in an open investigation
+    Given the expert provides a title and their author identifier
+    When the expert requests the opening of a new investigation
+    Then the investigation is created with status "open" and the provided data is preserved
 
-  # AC-1: Criação sem título obrigatório
+  # AC-1: Creation without required title
   @exception @ac-1
-  Scenario: Criação de investigação sem título é rejeitada
-    Given que o perito não informa o título da investigação
-    When o perito solicita a abertura de uma nova investigação
-    Then o serviço rejeita a requisição informando que o título é obrigatório
+  Scenario: Investigation creation without a title is rejected
+    Given the expert does not provide the investigation title
+    When the expert requests the opening of a new investigation
+    Then the service rejects the request informing that the title is required
 
-  # AC-2: Associação de registro a investigação aberta
+  # AC-2: Record association with an open investigation
   @happy-path @ac-2
-  Scenario: Múltiplos registros de auditoria são associados a uma investigação aberta
-    Given que existe uma investigação com status "aberta"
-    When o perito associa três registros de auditoria à investigação
-    Then os três registros aparecem na lista de evidências da investigação
+  Scenario: Multiple audit records are associated with an open investigation
+    Given an investigation with status "open" exists
+    When the expert associates three audit records with the investigation
+    Then the three records appear in the investigation's evidence list
 
-  # AC-3: Associação bloqueada em investigação fechada
+  # AC-3: Association blocked on a closed investigation
   @exception @ac-3 @regression
-  Scenario: Tentativa de associar registro a investigação fechada é rejeitada
-    Given que existe uma investigação com status "fechada"
-    When o perito tenta associar um novo registro à investigação
-    Then o serviço rejeita a operação informando que a investigação está encerrada
+  Scenario: Attempt to associate a record with a closed investigation is rejected
+    Given an investigation with status "closed" exists
+    When the expert attempts to associate a new record with the investigation
+    Then the service rejects the operation informing that the investigation is closed
 
-  # AC-4: Adição de anotação
+  # AC-4: Adding an annotation
   @happy-path @ac-4
-  Scenario: Anotação adicionada fica disponível no detalhe da investigação com autor e data
-    Given que existe uma investigação aberta
-    When o perito adiciona uma anotação com contexto da análise
-    Then a anotação é visível no detalhe da investigação com data de criação e autor registrados
+  Scenario: Added annotation is available in the investigation detail with author and date
+    Given an open investigation exists
+    When the expert adds an annotation with analysis context
+    Then the annotation is visible in the investigation detail with creation date and author recorded
 
-  # AC-5: Encerramento de investigação
+  # AC-5: Investigation closure
   @happy-path @ac-5
-  Scenario: Encerramento de investigação registra data e responsável pelo fechamento
-    Given que existe uma investigação com status "aberta"
-    When o perito solicita o encerramento da investigação informando seu identificador
-    Then a investigação passa para status "fechada" com data e responsável pelo encerramento registrados
+  Scenario: Investigation closure records the date and person responsible for closing
+    Given an investigation with status "open" exists
+    When the expert requests the closure of the investigation providing their identifier
+    Then the investigation transitions to status "closed" with the closure date and responsible party recorded
 
-  # AC-6: Reabertura de investigação
+  # AC-6: Investigation reopening
   @happy-path @ac-6
-  Scenario: Investigação encerrada pode ser reaberta para nova análise
-    Given que existe uma investigação com status "fechada"
-    When o perito solicita a reabertura da investigação
-    Then a investigação retorna ao status "aberta"
-    And novos registros podem ser associados a ela
+  Scenario: Closed investigation can be reopened for new analysis
+    Given an investigation with status "closed" exists
+    When the expert requests the reopening of the investigation
+    Then the investigation returns to status "open"
+    And new records can be associated with it
 
-  # AC-7: Detalhe com evidências e anotações
+  # AC-7: Detail with evidence and annotations
   @happy-path @ac-7
-  Scenario: Detalhe da investigação exibe todas as evidências e anotações associadas
-    Given que uma investigação possui três registros associados e duas anotações
-    When o perito consulta o detalhe da investigação
-    Then os três registros e as duas anotações são exibidos
+  Scenario: Investigation detail displays all associated evidence and annotations
+    Given an investigation has three associated records and two annotations
+    When the expert queries the investigation detail
+    Then the three records and the two annotations are displayed
 
-  # AC-8: Registro inexistente não pode ser associado
+  # AC-8: Non-existent record cannot be associated
   @exception @ac-8
-  Scenario: Associação de registro inexistente no LedgerDatabase é rejeitada
-    Given que o perito informa um identificador de registro que não existe no LedgerDatabase
-    When tenta associar esse identificador a uma investigação aberta
-    Then o serviço rejeita a operação informando que o registro não foi encontrado
+  Scenario: Association of a non-existent record in LedgerDatabase is rejected
+    Given the expert provides a record identifier that does not exist in LedgerDatabase
+    When they attempt to associate that identifier with an open investigation
+    Then the service rejects the operation informing that the record was not found
 
-  # AC-9: Listagem filtrada por status
+  # AC-9: Listing filtered by status
   @happy-path @ac-9
-  Scenario Outline: Listagem filtrada por status retorna apenas investigações correspondentes
-    Given que existem investigações abertas e investigações fechadas
-    When o perito lista investigações filtrando pelo status "<status>"
-    Then apenas investigações com o status "<status>" são retornadas
+  Scenario Outline: Listing filtered by status returns only matching investigations
+    Given there are open investigations and closed investigations
+    When the expert lists investigations filtering by status "<status>"
+    Then only investigations with status "<status>" are returned
 
     Examples:
       | status  |
       | open    |
       | closed  |
 
-  # AC-2: Interface de criação e associação de registros
+  # AC-2: Interface for investigation creation and record association
   @happy-path @ac-2
-  Scenario: Interface permite criar investigação e associar registros via modal de busca
-    Given que o perito acessa o formulário de nova investigação na interface web
-    When o perito preenche o formulário e busca registros para associar via modal de busca
-    Then a investigação é criada com os registros selecionados já associados
+  Scenario: Interface allows creating an investigation and associating records via search modal
+    Given the expert accesses the new investigation form in the web interface
+    When the expert fills out the form and searches for records to associate via the search modal
+    Then the investigation is created with the selected records already associated
 
-  # correlationId: localização em bloco de evidências de transação distribuída
+  # correlationId: block location of distributed transaction evidence
   @happy-path
-  Scenario: Modal de busca filtra por correlationId para localizar evidências de transação distribuída
-    Given que existe uma investigação aberta
-    And que múltiplos registros de diferentes serviços compartilham o correlationId "op-7263"
-    When o perito abre o modal de busca de registros e filtra por correlationId "op-7263"
-    Then todos os registros com esse correlationId são exibidos no modal para seleção
+  Scenario: Search modal filters by correlationId to locate distributed transaction evidence
+    Given an open investigation exists
+    And multiple records from different services share the correlationId "op-7263"
+    When the expert opens the record search modal and filters by correlationId "op-7263"
+    Then all records with that correlationId are displayed in the modal for selection
 ```
 
 ## Priority
@@ -230,8 +232,8 @@ Feature: Abertura e gestão de investigações
 
 ## Risk
 
-2 — Médio. Modelo de dados de investigação é independente do core de auditoria (não toca no LedgerDatabase em escrita). Risco principal é de modelagem: o relacionamento `investigation_entries` é uma referência soft ao `ledger_entry_id` (sem FK cross-database), o que exige validação manual.
+2 — Medium. The investigation data model is independent from the audit core (does not write to LedgerDatabase). The main risk is in modeling: the `investigation_entries` relationship is a soft reference to `ledger_entry_id` (no cross-database FK), which requires manual validation.
 
 ## Effort
 
-4 — G
+L

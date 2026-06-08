@@ -1,232 +1,231 @@
-# [FEATURE] FT-02 — Recepção de AuditEvents via HTTP (Ingestion Service)
+# [FEATURE] FT-02 — AuditEvent Reception via HTTP (Ingestion Service)
 
-## Descrição
+## Description
 
-**Wave 1 — MVP | Lean Inception: Registro Automático**
+**Wave 1 — MVP | Lean Inception: Automatic Registration**
 
-Esta feature implementa o serviço `raven-ledger.ingestion`, porta de entrada do RavenLedger. Sistemas clientes (CRM, Financeiro, Estoque, etc.) enviam eventos de auditoria via HTTP. O serviço valida o payload, autentica o sistema cliente via KeyCloak, enfileira o evento no Kafka para processamento assíncrono e retorna confirmação ao sistema cliente em menos de 100ms.
+This feature implements the `raven-ledger.ingestion` service, RavenLedger's entry point. Client systems (CRM, Finance, Inventory, etc.) send audit events via HTTP. The service validates the payload, authenticates the client system via KeyCloak, enqueues the event in Kafka for asynchronous processing, and returns confirmation to the client system in less than 100ms.
 
-O requisito de 100ms é crítico: sistemas clientes não podem ter sua performance degradada pela auditoria. Por isso, toda a lógica pesada (cálculo de hash, persistência no banco) é responsabilidade do `raven-ledger.register`, que consome a fila de forma assíncrona.
+The 100ms requirement is critical: client systems must not have their performance degraded by auditing. Therefore, all heavy processing (hash calculation, database persistence) is the responsibility of `raven-ledger.register`, which consumes the queue asynchronously.
 
-**Cenários de negócio:**
-- **Happy path:** Sistema cliente envia AuditEvent válido com token KeyCloak → ingestion autentica, valida, enfileira, retorna `202 Accepted` com `X-Event-Id`.
-- **Payload malformado:** Campo obrigatório ausente (ex: `metadata.source`) → `400 Bad Request` com campo inválido identificado.
-
-- **Token ausente ou inválido:** Requisição sem token ou com token expirado → `401 Unauthorized`.
-- **Broker indisponível:** Kafka fora do ar → `503 Service Unavailable`; sistema cliente deve retentar.
-- **Evento duplicado enviado:** Mesmo `metadata.eventId` reenviado → `202 Accepted` (idempotente na entrada; deduplicação ocorre no register).
+**Business scenarios:**
+- **Happy path:** Client system sends a valid AuditEvent with a KeyCloak token → ingestion authenticates, validates, enqueues, returns `202 Accepted` with `X-Event-Id`.
+- **Malformed payload:** Required field missing (e.g.: `metadata.source`) → `400 Bad Request` with the invalid field identified.
+- **Token absent or invalid:** Request without token or with an expired token → `401 Unauthorized`.
+- **Broker unavailable:** Kafka is down → `503 Service Unavailable`; client system should retry.
+- **Duplicate event sent:** Same `metadata.eventId` resent → `202 Accepted` (idempotent at the entry point; deduplication occurs in the register service).
 
 ---
 
-## Descrição Técnica
+## Technical Description
 
-**Serviço:** `raven-ledger.ingestion` (.NET 10 — WebAPI)
+**Service:** `raven-ledger.ingestion` (.NET 10 — WebAPI)
 
-**Contrato:** `docs/systemDesign/ingestion-api.openapi.yaml`
+**Contract:** `docs/systemDesign/ingestion-api.openapi.yaml`
 
 **Endpoint:**
 ```
 POST /api/v1/events
 Content-Type: application/json
-Authorization: Bearer <token KeyCloak>
+Authorization: Bearer <KeyCloak token>
 ```
 
-### Estrutura do payload
+### Payload structure
 
-O corpo da requisição é dividido em duas seções:
+The request body is divided into two sections:
 
-- **`metadata`** — identifica e roteia o evento (idempotência, origem, timestamp de transmissão e correlação distribuída).
-- **`event`** — conteúdo auditado (aplicação, usuário, operação e snapshot do dado).
+- **`metadata`** — identifies and routes the event (idempotency, origin, transmission timestamp, and distributed correlation).
+- **`event`** — audited content (application, user, operation, and data snapshot).
 
-### Autenticação
+### Authentication
 
-O sistema cliente deve obter um **token de serviço via KeyCloak** antes de enviar eventos. O `raven-ledger.ingestion` valida o token JWT a cada requisição. Requisições sem token ou com token inválido/expirado retornam `401 Unauthorized` antes de qualquer validação de payload.
+The client system must obtain a **service token via KeyCloak** before sending events. `raven-ledger.ingestion` validates the JWT token on every request. Requests without a token or with an invalid/expired token return `401 Unauthorized` before any payload validation.
 
-### Validações obrigatórias (metadata)
+### Required validations (metadata)
 
-- `metadata.eventId`: obrigatório, string não vazia. Padrão recomendado: `{app}-{domain}-{entity-key}`.
-- `metadata.source`: obrigatório, string não vazia (URI do sistema de origem).
-- `metadata.occurredAt`: obrigatório, ISO 8601.
-- `metadata.correlationId`: opcional, string; quando informado, propaga o identificador de operação distribuída para vincular eventos emitidos por diferentes microserviços que fazem parte da mesma transação de negócio.
+- `metadata.eventId`: required, non-empty string. Recommended pattern: `{app}-{domain}-{entity-key}`.
+- `metadata.source`: required, non-empty string (source system URI).
+- `metadata.occurredAt`: required, ISO 8601.
+- `metadata.correlationId`: optional, string; when provided, propagates the distributed operation identifier to link events emitted by different microservices that are part of the same business transaction.
 
-### Validações obrigatórias (event)
+### Required validations (event)
 
-- `event.appInfo.appname`, `event.appInfo.domain`: obrigatórios.
-- `event.user.id`: obrigatório.
-- `event.operation.entity`: obrigatório.
-- `event.operation.generatedAt`: obrigatório, ISO 8601.
+- `event.appInfo.appname`, `event.appInfo.domain`: required.
+- `event.user.id`: required.
+- `event.operation.entity`: required.
+- `event.operation.generatedAt`: required, ISO 8601.
 
-### Resposta de sucesso
+### Success response
 
 ```
 HTTP 202 Accepted
 X-Event-Id: {metadata.eventId}
 ```
 
-### Publicação no Kafka
+### Kafka publishing
 
-Após validação, publica o payload completo no tópico `audit.events.received` usando **Confluent.Kafka** com publisher confirms (acks). O nome do tópico e o timeout de conexão com o broker são configurados via **RavenConfig** (banco mantido pelo `raven-ledger.api`).
+After validation, publishes the full payload to the `audit.events.received` topic using **Confluent.Kafka** with publisher confirms (acks). The topic name and broker connection timeout are configured via **RavenConfig** (database maintained by `raven-ledger.api`).
 
-### Gestão de Segredos
+### Secrets management
 
-- **Ambiente produtivo:** segredos (credenciais Kafka, client secret KeyCloak) armazenados no **OpenBao**; a aplicação acessa o vault diretamente em startup.
-- **Ambiente local:** segredos armazenados em arquivo `.env` (**nunca versionado**). Para cada `.env` esperado, existe um `.env.template` no mesmo nível, com as chaves sem valor real.
+- **Production environment:** secrets (Kafka credentials, KeyCloak client secret) stored in **OpenBao**; the application accesses the vault directly at startup.
+- **Local environment:** secrets stored in a `.env` file (**never committed**). For each expected `.env`, a `.env.template` exists at the same level, with keys but no real values.
 
-### Logs estruturados (Serilog — JSON)
+### Structured logs (Serilog — JSON)
 
-- `event_received` → `event_id`, `source`, `domain`, `entity`, `correlation_id` (quando presente), `latency_ms`
-- `event_validation_failed` → `event_id` (se presente), `errors[]`, `latency_ms`
+- `event_received` → `event_id`, `source`, `domain`, `entity`, `correlation_id` (when present), `latency_ms`
+- `event_validation_failed` → `event_id` (if present), `errors[]`, `latency_ms`
 - `broker_publish_failed` → `event_id`, `error`
 - `auth_failed` → `reason`, `latency_ms`
 
-### Métricas de estabilidade
+### Stability metrics
 
-- Latência P99 < 100ms
-- Taxa de erro 4xx < 1% em operação normal
-- Taxa de erro 5xx < 0,1%
+- P99 latency < 100ms
+- 4xx error rate < 1% under normal operation
+- 5xx error rate < 0.1%
 
-### Configurações via RavenConfig (gerenciado pelo `raven-ledger.api`)
+### Configuration via RavenConfig (managed by `raven-ledger.api`)
 
-- Nome do tópico Kafka de destino
-- Timeout de conexão com o broker
-- URL do KeyCloak e realm de validação de token
-
----
-
-## Critérios de Aceite
-
-- [ ] `POST /api/v1/events` com payload válido e token KeyCloak retorna `202 Accepted`
-- [ ] Header `X-Event-Id` presente na resposta de sucesso com o valor de `metadata.eventId`
-- [ ] Requisição sem token ou com token inválido retorna `401 Unauthorized`
-- [ ] Payload com campo obrigatório ausente retorna `400 Bad Request` com identificação do campo em dot-notation
-- [ ] `event.operation.type` inválido retorna `400 Bad Request`
-- [ ] Evento é publicado no tópico Kafka `audit.events.received` após aceite
-- [ ] Broker indisponível retorna `503 Service Unavailable`
-- [ ] Latência P99 < 100ms medida em carga de 50 req/s
-- [ ] Log `event_received` emitido para cada evento aceito com campos corretos
-- [ ] Segredos de acesso ao Kafka e KeyCloak não são versionados; `.env.template` presente no repositório
-- [ ] Serviço não armazena dados em banco próprio (stateless)
-- [ ] `metadata.correlationId` informado no payload é preservado e publicado no evento Kafka
+- Target Kafka topic name
+- Broker connection timeout
+- KeyCloak URL and token validation realm
 
 ---
 
-## Cenários de Teste
+## Acceptance Criteria
+
+- [ ] `POST /api/v1/events` with valid payload and KeyCloak token returns `202 Accepted`
+- [ ] `X-Event-Id` header present in the success response with the `metadata.eventId` value
+- [ ] Request without token or with invalid token returns `401 Unauthorized`
+- [ ] Payload with missing required field returns `400 Bad Request` with the field identified in dot-notation
+- [ ] Invalid `event.operation.type` returns `400 Bad Request`
+- [ ] Event is published to Kafka topic `audit.events.received` after acceptance
+- [ ] Unavailable broker returns `503 Service Unavailable`
+- [ ] P99 latency < 100ms measured under 50 req/s load
+- [ ] `event_received` log emitted for each accepted event with correct fields
+- [ ] Kafka and KeyCloak access secrets are not committed; `.env.template` present in the repository
+- [ ] Service does not store data in its own database (stateless)
+- [ ] `metadata.correlationId` provided in the payload is preserved and published in the Kafka event
+
+---
+
+## Test Scenarios
 
 ```gherkin
-# language: pt
+# language: en
 
 @regression
-Feature: Recepção de AuditEvents via HTTP
-  Como sistema cliente autenticado
-  Quero enviar eventos de auditoria ao RavenLedger
-  Para que cada operação sobre dados seja registrada de forma confiável sem impactar minha performance
+Feature: AuditEvent reception via HTTP
+  As an authenticated client system
+  I want to send audit events to RavenLedger
+  So that each data operation is reliably recorded without impacting my performance
 
   Background:
-    Given que o sistema cliente possui um token de serviço válido emitido pelo KeyCloak
-    And que o broker Kafka está operacional
+    Given the client system has a valid service token issued by KeyCloak
+    And the Kafka broker is operational
 
-  # AC-1: Evento válido aceito e enfileirado
+  # AC-1: Valid event accepted and enqueued
   @happy-path @ac-1 @ac-2
-  Scenario: Envio de AuditEvent válido retorna confirmação de aceite com identificador
-    Given que o payload contém metadata e event com todos os campos obrigatórios válidos
-    When o sistema cliente envia o evento de auditoria
-    Then o serviço confirma o aceite com o identificador do evento
-    And o evento é publicado na fila para processamento assíncrono
+  Scenario: Sending a valid AuditEvent returns an acceptance confirmation with an identifier
+    Given the payload contains metadata and event with all required fields valid
+    When the client system sends the audit event
+    Then the service confirms acceptance with the event identifier
+    And the event is published to the queue for asynchronous processing
 
-  # AC-3: Campos obrigatórios de metadata ausentes
+  # AC-3: Missing required metadata fields
   @exception @ac-3
-  Scenario Outline: Rejeição de evento com campo obrigatório de metadata ausente
-    Given que o payload está sem o campo "<campo>"
-    When o sistema cliente envia o evento de auditoria
-    Then o serviço rejeita a requisição identificando o campo "<campo>" como inválido
+  Scenario Outline: Rejection of event with missing required metadata field
+    Given the payload is missing the "<field>" field
+    When the client system sends the audit event
+    Then the service rejects the request identifying the "<field>" field as invalid
 
     Examples:
-      | campo                |
+      | field                |
       | metadata.eventId     |
       | metadata.source      |
       | metadata.occurredAt  |
 
-  # AC-3: Campos obrigatórios de event ausentes
+  # AC-3: Missing required event fields
   @exception @ac-3
-  Scenario Outline: Rejeição de evento com campo obrigatório de event ausente
-    Given que o payload está sem o campo "<campo>"
-    When o sistema cliente envia o evento de auditoria
-    Then o serviço rejeita a requisição identificando o campo "<campo>" como inválido
+  Scenario Outline: Rejection of event with missing required event field
+    Given the payload is missing the "<field>" field
+    When the client system sends the audit event
+    Then the service rejects the request identifying the "<field>" field as invalid
 
     Examples:
-      | campo                        |
+      | field                        |
       | event.appInfo.appname        |
       | event.appInfo.domain         |
       | event.user.id                |
       | event.operation.entity       |
       | event.operation.generatedAt  |
 
-  # AC-4: Tipo de operação inválido
+  # AC-4: Invalid operation type
   @exception @ac-4
-  Scenario: Rejeição de evento com operation.type fora do domínio aceito
-    Given que o payload contém o campo "event.operation.type" com o valor "read"
-    When o sistema cliente envia o evento de auditoria
-    Then o serviço rejeita a requisição identificando o campo "event.operation.type" como inválido
+  Scenario: Rejection of event with operation.type outside the accepted domain
+    Given the payload contains the field "event.operation.type" with the value "read"
+    When the client system sends the audit event
+    Then the service rejects the request identifying the field "event.operation.type" as invalid
 
-  # AC-1: Idempotência na entrada
+  # AC-1: Idempotency at the entry point
   @happy-path @ac-1
-  Scenario: Evento com identificador duplicado é aceito sem erro na entrada
-    Given que um evento com o identificador "crm-sales-order-001" já foi enviado anteriormente
-    When o sistema cliente envia novamente o evento com o identificador "crm-sales-order-001"
-    Then o serviço confirma o aceite sem erro
-    And a deduplicação ocorrerá no serviço de registro
+  Scenario: Event with duplicate identifier is accepted without error at the entry point
+    Given an event with the identifier "crm-sales-order-001" has already been sent previously
+    When the client system sends the event again with the identifier "crm-sales-order-001"
+    Then the service confirms acceptance without error
+    And deduplication will occur in the registration service
 
-  # AC-6: Broker indisponível
+  # AC-6: Broker unavailable
   @exception @ac-6
-  Scenario: Broker indisponível resulta em resposta de serviço temporariamente indisponível
-    Given que o broker Kafka está fora do ar
-    When o sistema cliente envia um evento de auditoria válido
-    Then o serviço informa que está temporariamente indisponível
-    And o sistema cliente deve retentar a operação
+  Scenario: Unavailable broker results in a service temporarily unavailable response
+    Given the Kafka broker is down
+    When the client system sends a valid audit event
+    Then the service informs that it is temporarily unavailable
+    And the client system should retry the operation
 
-  # Autenticação: token ausente
+  # Authentication: missing token
   @exception @regression
-  Scenario: Requisição sem token de autenticação é rejeitada antes de qualquer validação
-    Given que o sistema cliente não possui token de autenticação
-    When o sistema cliente tenta enviar um evento de auditoria
-    Then o serviço rejeita a requisição por falta de autenticação
+  Scenario: Request without authentication token is rejected before any validation
+    Given the client system does not have an authentication token
+    When the client system attempts to send an audit event
+    Then the service rejects the request due to missing authentication
 
-  # Autenticação: token inválido ou expirado
+  # Authentication: invalid or expired token
   @exception @regression
-  Scenario: Requisição com token expirado é rejeitada
-    Given que o sistema cliente possui um token de autenticação expirado
-    When o sistema cliente tenta enviar um evento de auditoria
-    Then o serviço rejeita a requisição por falta de autenticação
+  Scenario: Request with an expired token is rejected
+    Given the client system has an expired authentication token
+    When the client system attempts to send an audit event
+    Then the service rejects the request due to missing authentication
 
-  # AC-7: Latência P99 sob carga
+  # AC-7: P99 latency under load
   @boundary @ac-7
-  Scenario: Latência P99 permanece abaixo do limite sob carga simultânea
-    Given que 50 requisições são enviadas simultaneamente com payloads válidos
-    When todas as requisições são processadas
-    Then o percentil 99 de latência fica abaixo de 100 milissegundos
+  Scenario: P99 latency stays below the limit under simultaneous load
+    Given 50 requests are sent simultaneously with valid payloads
+    When all requests are processed
+    Then the 99th percentile latency stays below 100 milliseconds
 
-  # AC-8: Log de evento aceito
+  # AC-8: Log of accepted event
   @happy-path @ac-8
-  Scenario: Log estruturado emitido para cada evento aceito contém os campos esperados
-    Given que um evento de auditoria válido é enviado
-    When o serviço confirma o aceite
-    Then o log event_received é emitido com event_id, source, domain, entity e latência
+  Scenario: Structured log emitted for each accepted event contains the expected fields
+    Given a valid audit event is sent
+    When the service confirms acceptance
+    Then the event_received log is emitted with event_id, source, domain, entity, and latency
 
-  # AC-9: Serviço sem persistência própria
+  # AC-9: Service without own persistence
   @happy-path @ac-9
-  Scenario: Serviço de ingestão não armazena dados em banco próprio
-    Given que múltiplos eventos de auditoria foram aceitos pelo serviço de ingestão
-    When o banco de dados interno do serviço é consultado
-    Then nenhuma tabela de dados de eventos é encontrada
+  Scenario: Ingestion service does not store data in its own database
+    Given multiple audit events have been accepted by the ingestion service
+    When the service's internal database is queried
+    Then no event data tables are found
 
-  # correlationId: campo repassado ao publicar
+  # correlationId: field forwarded on publish
   @happy-path
-  Scenario: Evento com correlationId é publicado na fila preservando o identificador de correlação
-    Given que o payload contém o campo "metadata.correlationId" com o valor "op-7263"
-    And que o payload contém metadata e event com todos os demais campos obrigatórios válidos
-    When o sistema cliente envia o evento de auditoria
-    Then o serviço confirma o aceite
-    And o evento publicado na fila contém o campo correlationId com o valor "op-7263"
+  Scenario: Event with correlationId is published to the queue preserving the correlation identifier
+    Given the payload contains the field "metadata.correlationId" with the value "op-7263"
+    And the payload contains metadata and event with all other required fields valid
+    When the client system sends the audit event
+    Then the service confirms acceptance
+    And the event published to the queue contains the correlationId field with the value "op-7263"
 ```
 
 ---
@@ -237,8 +236,8 @@ Feature: Recepção de AuditEvents via HTTP
 
 ## Risk
 
-2 — Médio. O contrato REST define a interface com sistemas externos. Qualquer mudança de quebra impacta todos os sistemas clientes integrados. Versionar a API desde o início (`/v1/`) reduz o risco de evolução futura. A dependência do KeyCloak adiciona risco de disponibilidade na autenticação.
+2 — Medium. The REST contract defines the interface with external systems. Any breaking change impacts all integrated client systems. Versioning the API from the start (`/v1/`) reduces the risk of future evolution. The dependency on KeyCloak adds availability risk to authentication.
 
 ## Effort
 
-2 — P
+S
