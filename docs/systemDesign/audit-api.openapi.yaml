@@ -1,0 +1,639 @@
+openapi: 3.0.3
+
+info:
+  title: RavenLedger — Audit Query API
+  description: |
+    API de somente-leitura do RavenLedger. Expõe os registros do LedgerDatabase para
+    consulta por peritos judiciais, analistas de compliance e integrações externas.
+
+    Todos os endpoints são de leitura. Nenhuma operação de escrita é exposta.
+    O usuário de banco da aplicação possui apenas permissão `SELECT`.
+  version: 1.0.0
+  contact:
+    name: BlogDoFT / RavenLedger
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:5100
+    description: Local development
+  - url: https://api.ravenledger.internal
+    description: Cluster interno (K3D / ArgoCD)
+
+tags:
+  - name: Audit Entries
+    description: Consulta da trilha de auditoria
+  - name: Integrity
+    description: Verificação criptográfica da integridade da cadeia de hashes
+
+security:
+  - BearerAuth: []
+
+paths:
+  /api/v1/audit-entries:
+    get:
+      tags:
+        - Audit Entries
+      operationId: listAuditEntries
+      summary: Lista registros da trilha de auditoria com filtros e paginação
+      description: |
+        Retorna uma lista paginada de registros de auditoria. Todos os filtros são opcionais
+        e podem ser combinados. Uma consulta sem filtros retorna os primeiros 20 registros
+        ordenados por `receivedAt` decrescente.
+
+        Filtros de período (`from` / `to`) incidem sobre `receivedAt` — o momento em que o
+        RavenLedger recebeu o evento, não o momento em que a operação foi gerada no sistema
+        de origem.
+
+        Resultado vazio com filtros válidos retorna `200 OK` com `items: []` — não é erro.
+      parameters:
+        - name: entity
+          in: query
+          description: Filtra pelo nome da entidade auditada (ex. `orders`, `users`).
+          required: false
+          schema:
+            type: string
+          example: orders
+        - name: domain
+          in: query
+          description: Filtra pelo domínio de negócio da aplicação de origem (ex. `sales`, `financeiro`).
+          required: false
+          schema:
+            type: string
+          example: sales
+        - name: user_id
+          in: query
+          description: Filtra pelo identificador do usuário que realizou a operação.
+          required: false
+          schema:
+            type: string
+          example: "usr-42"
+        - name: operation
+          in: query
+          description: Filtra pelo tipo de operação realizada.
+          required: false
+          schema:
+            type: string
+            enum:
+              - insert
+              - update
+              - delete
+          example: update
+        - name: from
+          in: query
+          description: Início do intervalo de busca em `receivedAt` (ISO 8601, inclusive).
+          required: false
+          schema:
+            type: string
+            format: date-time
+          example: "2024-01-01T00:00:00Z"
+        - name: to
+          in: query
+          description: |
+            Fim do intervalo de busca em `receivedAt` (ISO 8601, inclusive).
+            Deve ser maior ou igual a `from` quando ambos forem informados.
+          required: false
+          schema:
+            type: string
+            format: date-time
+          example: "2024-01-31T23:59:59Z"
+        - name: page
+          in: query
+          description: Número da página (base 1).
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          example: 1
+        - name: size
+          in: query
+          description: Quantidade de registros por página. Máximo de 100.
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          example: 20
+      responses:
+        "200":
+          description: Lista paginada de registros de auditoria. Pode ser vazia.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEntryPage'
+              example:
+                items:
+                  - id: "550e8400-e29b-41d4-a716-446655440000"
+                    eventId: "crm-sales-order-7891"
+                    source: "https://crm.example.com/"
+                    domain: sales
+                    entity: orders
+                    appName: crm-service
+                    userId: "usr-42"
+                    userName: John Doe
+                    operationType: insert
+                    generatedAt: "2024-01-15T10:00:00Z"
+                    transmittedAt: "2024-01-15T10:00:01Z"
+                    receivedAt: "2024-01-15T10:00:02Z"
+                total: 1
+                page: 1
+                size: 20
+        "400":
+          description: |
+            Parâmetros de consulta inválidos. Possíveis causas:
+            - `from` posterior a `to`
+            - `operation` com valor fora do domínio aceito
+            - `size` acima de 100
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+              examples:
+                invalid_period:
+                  summary: Período com from posterior a to
+                  value:
+                    type: "https://ravenledger.internal/errors/validation"
+                    title: "Validation failed"
+                    status: 400
+                    errors:
+                      - field: from
+                        message: "'from' must be earlier than or equal to 'to'."
+                invalid_operation:
+                  summary: Tipo de operação inválido
+                  value:
+                    type: "https://ravenledger.internal/errors/validation"
+                    title: "Validation failed"
+                    status: 400
+                    errors:
+                      - field: operation
+                        message: "'operation' must be one of: insert, update, delete."
+                size_exceeded:
+                  summary: Tamanho de página acima do limite
+                  value:
+                    type: "https://ravenledger.internal/errors/validation"
+                    title: "Validation failed"
+                    status: 400
+                    errors:
+                      - field: size
+                        message: "'size' must not exceed 100."
+        "401":
+          description: Token de autenticação ausente, inválido ou expirado.
+
+  /api/v1/audit-entries/verify-range:
+    get:
+      tags:
+        - Integrity
+      operationId: verifyIntegrityRange
+      summary: Verifica a integridade da cadeia de hashes em um período
+      description: |
+        Percorre todos os ramos da árvore de hashes — do genesis até as folhas — para os
+        registros cujo `receivedAt` esteja dentro do período informado. Para na primeira falha
+        detectada em qualquer ramo.
+
+        A verificação recalcula o hash de cada registro segundo o algoritmo canônico definido
+        na FT-03 e compara com o valor armazenado. Também valida que `previous_hash` de cada
+        registro corresponde ao `hash` do predecessor apontado por `previous_id`.
+
+        Uma faixa sem adulterações retorna `{ valid: true, entriesChecked: N }`.
+        Ao detectar a primeira falha, retorna `{ valid: false, chainBrokenAt: "<uuid>", ... }`.
+
+        Filtros `from` e `to` são obrigatórios para limitar o escopo da varredura.
+      parameters:
+        - name: from
+          in: query
+          description: Início do intervalo de verificação em `receivedAt` (ISO 8601, inclusive).
+          required: true
+          schema:
+            type: string
+            format: date-time
+          example: "2024-01-01T00:00:00Z"
+        - name: to
+          in: query
+          description: |
+            Fim do intervalo de verificação em `receivedAt` (ISO 8601, inclusive).
+            Deve ser maior ou igual a `from`.
+          required: true
+          schema:
+            type: string
+            format: date-time
+          example: "2024-01-31T23:59:59Z"
+      responses:
+        "200":
+          description: |
+            Resultado da verificação. `valid: true` confirma integridade de todos os registros
+            no período. `valid: false` indica adulteração e identifica o ponto de quebra.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChainIntegrityResult'
+              examples:
+                valid_range:
+                  summary: Faixa íntegra
+                  value:
+                    valid: true
+                    entriesChecked: 150
+                broken_chain:
+                  summary: Adulteração detectada
+                  value:
+                    valid: false
+                    chainBrokenAt: "550e8400-e29b-41d4-a716-446655440000"
+                    entriesChecked: 73
+                    firstFailureAt: "2024-01-15T10:00:02Z"
+        "400":
+          description: |
+            Parâmetros inválidos. Possíveis causas:
+            - `from` posterior a `to`
+            - `from` ou `to` ausentes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+              examples:
+                invalid_period:
+                  summary: Período com from posterior a to
+                  value:
+                    type: "https://ravenledger.internal/errors/validation"
+                    title: "Validation failed"
+                    status: 400
+                    errors:
+                      - field: from
+                        message: "'from' must be earlier than or equal to 'to'."
+                missing_from:
+                  summary: Parâmetro from ausente
+                  value:
+                    type: "https://ravenledger.internal/errors/validation"
+                    title: "Validation failed"
+                    status: 400
+                    errors:
+                      - field: from
+                        message: "'from' is required."
+        "401":
+          description: Token de autenticação ausente, inválido ou expirado.
+
+  /api/v1/audit-entries/{id}:
+    get:
+      tags:
+        - Audit Entries
+      operationId: getAuditEntry
+      summary: Retorna o detalhe completo de um registro de auditoria
+      description: |
+        Retorna todos os campos do registro, incluindo o campo `data` com o snapshot
+        do estado da entidade no momento da operação original.
+      parameters:
+        - name: id
+          in: path
+          description: Identificador UUID do registro no LedgerDatabase.
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        "200":
+          description: Detalhe completo do registro de auditoria.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEntryDetail'
+              example:
+                id: "550e8400-e29b-41d4-a716-446655440000"
+                eventId: "crm-sales-order-7891"
+                source: "https://crm.example.com/"
+                domain: sales
+                entity: orders
+                appName: crm-service
+                userId: "usr-42"
+                userName: John Doe
+                operationType: insert
+                generatedAt: "2024-01-15T10:00:00Z"
+                transmittedAt: "2024-01-15T10:00:01Z"
+                receivedAt: "2024-01-15T10:00:02Z"
+                data:
+                  id: "ORD-7891"
+                  amount: 1500.00
+                  status: confirmed
+        "401":
+          description: Token de autenticação ausente, inválido ou expirado.
+        "404":
+          description: Registro não encontrado para o identificador informado.
+
+  /api/v1/audit-entries/{id}/verify:
+    get:
+      tags:
+        - Integrity
+      operationId: verifyAuditEntry
+      summary: Verifica a integridade criptográfica de um registro de auditoria
+      description: |
+        Recalcula o hash do registro segundo o algoritmo canônico definido na FT-03 e compara
+        com o valor armazenado em `ledger_entries.hash`. Também valida que `previous_hash`
+        corresponde ao `hash` do registro predecessor apontado por `previous_id`.
+
+        Dois tipos de falha são detectados:
+        - `hash_mismatch`: o hash recalculado difere do armazenado — algum campo mapeado
+          foi alterado diretamente no banco após a gravação.
+        - `previous_hash_broken`: o `previous_hash` deste registro não corresponde ao `hash`
+          do predecessor — a ligação criptográfica entre registros foi rompida.
+      parameters:
+        - name: id
+          in: path
+          description: Identificador UUID do registro no LedgerDatabase.
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        "200":
+          description: |
+            Resultado da verificação. `valid: true` confirma integridade; `valid: false`
+            indica adulteração com o motivo identificado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrityCheckResult'
+              examples:
+                record_valid:
+                  summary: Registro íntegro
+                  value:
+                    valid: true
+                    entryId: "550e8400-e29b-41d4-a716-446655440000"
+                    hash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+                hash_mismatch:
+                  summary: Payload adulterado
+                  value:
+                    valid: false
+                    entryId: "550e8400-e29b-41d4-a716-446655440000"
+                    reason: hash_mismatch
+                previous_hash_broken:
+                  summary: Ligação da cadeia quebrada
+                  value:
+                    valid: false
+                    entryId: "550e8400-e29b-41d4-a716-446655440000"
+                    reason: previous_hash_broken
+        "401":
+          description: Token de autenticação ausente, inválido ou expirado.
+        "404":
+          description: Registro não encontrado para o identificador informado.
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Token emitido pelo KeyCloak. Peritos e analistas de compliance obtêm o token
+        via fluxo interativo (Authorization Code); integrações externas via Client Credentials.
+
+  schemas:
+
+    AuditEntryPage:
+      type: object
+      description: Resultado paginado da consulta à trilha de auditoria.
+      required:
+        - items
+        - total
+        - page
+        - size
+      properties:
+        items:
+          type: array
+          description: Registros da página atual. Pode ser vazio.
+          items:
+            $ref: '#/components/schemas/AuditEntrySummary'
+        total:
+          type: integer
+          description: Total de registros que satisfazem os filtros aplicados.
+          example: 1
+        page:
+          type: integer
+          description: Número da página atual (base 1).
+          example: 1
+        size:
+          type: integer
+          description: Tamanho de página utilizado na consulta.
+          example: 20
+
+    AuditEntrySummary:
+      type: object
+      description: Resumo de um registro de auditoria, sem o snapshot de dados.
+      required:
+        - id
+        - eventId
+        - source
+        - domain
+        - entity
+        - appName
+        - userId
+        - operationType
+        - generatedAt
+        - receivedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Identificador único do registro no LedgerDatabase.
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        eventId:
+          type: string
+          description: Identificador do evento conforme enviado pelo sistema de origem.
+          example: "crm-sales-order-7891"
+        source:
+          type: string
+          description: URI do sistema de origem do evento.
+          example: "https://crm.example.com/"
+        domain:
+          type: string
+          description: Domínio de negócio da aplicação de origem.
+          example: sales
+        entity:
+          type: string
+          description: Nome da entidade auditada.
+          example: orders
+        appName:
+          type: string
+          description: Nome da aplicação de origem.
+          example: crm-service
+        userId:
+          type: string
+          description: Identificador do usuário que realizou a operação.
+          example: "usr-42"
+        userName:
+          type: string
+          description: Nome do usuário que realizou a operação.
+          example: John Doe
+        operationType:
+          type: string
+          description: Tipo de operação realizada.
+          enum:
+            - insert
+            - update
+            - delete
+          example: insert
+        generatedAt:
+          type: string
+          format: date-time
+          description: Timestamp de quando a operação foi gerada no sistema de origem.
+          example: "2024-01-15T10:00:00Z"
+        transmittedAt:
+          type: string
+          format: date-time
+          description: Timestamp de quando o evento foi transmitido ao RavenLedger.
+          example: "2024-01-15T10:00:01Z"
+        receivedAt:
+          type: string
+          format: date-time
+          description: Timestamp de quando o RavenLedger registrou o evento no LedgerDatabase.
+          example: "2024-01-15T10:00:02Z"
+
+    AuditEntryDetail:
+      description: Detalhe completo de um registro de auditoria, incluindo snapshot de dados.
+      allOf:
+        - $ref: '#/components/schemas/AuditEntrySummary'
+        - type: object
+          required:
+            - data
+          properties:
+            data:
+              $ref: '#/components/schemas/EntitySnapshot'
+
+    EntitySnapshot:
+      type: object
+      description: |
+        Snapshot do estado da entidade no momento da operação. Estrutura livre,
+        definida pelo sistema de origem. Imutável após registro no LedgerDatabase.
+      additionalProperties: true
+      example:
+        id: "ORD-7891"
+        amount: 1500.00
+        status: confirmed
+
+    ValidationErrorResponse:
+      type: object
+      description: Resposta de erro de validação (RFC 7807 — Problem Details).
+      required:
+        - type
+        - title
+        - status
+        - errors
+      properties:
+        type:
+          type: string
+          description: URI que identifica o tipo de erro.
+          example: "https://ravenledger.internal/errors/validation"
+        title:
+          type: string
+          example: "Validation failed"
+        status:
+          type: integer
+          example: 400
+        errors:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ValidationError'
+
+    ValidationError:
+      type: object
+      description: Detalhe de um parâmetro inválido.
+      required:
+        - field
+        - message
+      properties:
+        field:
+          type: string
+          description: Nome do parâmetro com erro (ex. `from`, `operation`, `size`).
+          example: "from"
+        message:
+          type: string
+          description: Descrição legível do motivo da rejeição.
+          example: "'from' must be earlier than or equal to 'to'."
+
+    IntegrityCheckResult:
+      type: object
+      description: |
+        Resultado da verificação de integridade de um registro. Quando `valid` é `false`,
+        o campo `reason` indica o tipo de adulteração detectada.
+      required:
+        - valid
+        - entryId
+      properties:
+        valid:
+          type: boolean
+          description: Indica se o registro está íntegro.
+        entryId:
+          type: string
+          format: uuid
+          description: Identificador do registro verificado.
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        hash:
+          type: string
+          description: Hash SHA-256 armazenado do registro. Presente somente quando `valid` é `true`.
+          minLength: 64
+          maxLength: 64
+          example: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+        reason:
+          type: string
+          description: |
+            Motivo da falha de integridade. Presente somente quando `valid` é `false`.
+            - `hash_mismatch`: hash recalculado difere do armazenado — algum campo foi alterado.
+            - `previous_hash_broken`: `previous_hash` não corresponde ao hash do predecessor —
+              a ligação criptográfica entre registros foi rompida.
+          enum:
+            - hash_mismatch
+            - previous_hash_broken
+
+    ChainIntegrityResult:
+      type: object
+      description: |
+        Resultado da verificação de integridade de uma faixa de registros. Quando `valid` é
+        `false`, os campos `chainBrokenAt` e `firstFailureAt` identificam o ponto de quebra.
+      required:
+        - valid
+        - entriesChecked
+      properties:
+        valid:
+          type: boolean
+          description: Indica se todos os registros da faixa estão íntegros.
+        entriesChecked:
+          type: integer
+          description: Total de registros verificados até a conclusão (ou até a primeira falha).
+          example: 150
+        chainBrokenAt:
+          type: string
+          format: uuid
+          description: |
+            Identificador do registro onde a cadeia foi quebrada. Presente somente quando
+            `valid` é `false`.
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        firstFailureAt:
+          type: string
+          format: date-time
+          description: |
+            `receivedAt` do registro onde a falha foi detectada. Presente somente quando
+            `valid` é `false`.
+          example: "2024-01-15T10:00:02Z"
+
+    ProblemDetails:
+      type: object
+      description: Resposta de erro genérica (RFC 7807 — Problem Details).
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          example: "https://ravenledger.internal/errors/not-found"
+        title:
+          type: string
+          example: "Not Found"
+        status:
+          type: integer
+          example: 404
+        detail:
+          type: string
+          description: Explicação legível do erro para uso em diagnóstico.
+          example: "Audit entry '550e8400-e29b-41d4-a716-446655440000' was not found."
