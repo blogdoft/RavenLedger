@@ -3,12 +3,12 @@ openapi: 3.0.3
 info:
   title: RavenLedger — Ingestion Service API
   description: |
-    Porta de entrada do RavenLedger. Sistemas clientes enviam eventos de auditoria
+    RavenLedger's entry point. Client systems send audit events
     via REST.
 
-    O corpo da requisição é dividido em duas seções:
-    - `metadata`: identifica e roteia o evento (idempotência, origem, timestamp de transmissão).
-    - `event`: conteúdo auditado (aplicação, usuário, operação e snapshot do dado).
+    The request body is split into two sections:
+    - `metadata`: identifies and routes the event (idempotency, origin, transmission timestamp).
+    - `event`: audited content (application, user, operation, and data snapshot).
   version: 1.0.0
   contact:
     name: BlogDoFT / RavenLedger
@@ -19,11 +19,11 @@ servers:
   - url: http://localhost:5200
     description: Local development
   - url: https://ingestion.ravenledger.internal
-    description: Cluster interno (K3D / ArgoCD)
+    description: Internal cluster (K3D / ArgoCD)
 
 tags:
   - name: Events
-    description: Recepção de AuditEvents
+    description: AuditEvent reception
 
 security:
   - BearerAuth: []
@@ -34,15 +34,15 @@ paths:
       tags:
         - Events
       operationId: receiveAuditEvent
-      summary: Recebe e enfileira um AuditEvent
+      summary: Receives and queues an AuditEvent
       description: |
-        Ingere os eventos enviados por aplicações autorizadas. 
-        
-        A disponibilidade para consulta dos dados não é imediata, podendo levar alguns minutos para estar
-        disponível.
+        Ingests events sent by authorized applications.
 
-        O endpoint é idempotente na entrada: um `metadata.eventId` já recebido retorna
-        `202` sem erro.
+        Availability for querying the data is not immediate and may take a few minutes to become
+        available.
+
+        The endpoint is idempotent on input: an already-received `metadata.eventId` returns
+        `202` without error.
       requestBody:
         required: true
         content:
@@ -77,25 +77,25 @@ paths:
                   status: confirmed
       responses:
         "202":
-          description: Evento aceito e enfileirado para processamento assíncrono.
+          description: Event accepted and queued for asynchronous processing.
           headers:
             X-Event-Id:
-              description: Espelho de `metadata.eventId` para rastreamento imediato pelo cliente.
+              description: Mirrors `metadata.eventId` for immediate tracking by the client.
               required: true
               schema:
                 type: string
               example: "crm-sales-order-7891"
         "400":
           description: |
-            Payload inválido. Pelo menos um campo obrigatório está ausente ou com
-            valor fora do domínio aceito. O corpo da resposta lista todos os campos com erro.
+            Invalid payload. At least one required field is missing or has a
+            value outside the accepted domain. The response body lists all fields with errors.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ValidationErrorResponse'
               examples:
                 missing_source:
-                  summary: Campo obrigatório de metadata ausente
+                  summary: Required metadata field missing
                   value:
                     type: "https://ravenledger.internal/errors/validation"
                     title: "Validation failed"
@@ -104,7 +104,7 @@ paths:
                       - field: "metadata.source"
                         message: "Field 'metadata.source' is required and must not be empty."
                 invalid_operation_type:
-                  summary: Tipo de operação fora do domínio
+                  summary: Operation type outside the domain
                   value:
                     type: "https://ravenledger.internal/errors/validation"
                     title: "Validation failed"
@@ -114,8 +114,8 @@ paths:
                         message: "Field 'event.operation.type' must be one of: insert, update, delete."
         "401":
           description: |
-            Token de autenticação ausente, inválido ou expirado.
-            Nenhuma validação de payload é realizada antes da autenticação.
+            Authentication token missing, invalid, or expired.
+            No payload validation is performed before authentication.
 
 components:
   securitySchemes:
@@ -124,16 +124,16 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: |
-        Token de serviço emitido pelo KeyCloak. O sistema cliente deve obter o token
-        via Client Credentials Grant antes de enviar eventos.
+        Service token issued by KeyCloak. The client system must obtain the token
+        via Client Credentials Grant before sending events.
 
   schemas:
 
     AuditEventRequest:
       type: object
       description: |
-        Corpo da requisição de ingestão. Separa metadados de transporte (`metadata`)
-        do conteúdo auditado (`event`).
+        Ingestion request body. Separates transport metadata (`metadata`)
+        from the audited content (`event`).
       required:
         - metadata
         - event
@@ -146,8 +146,8 @@ components:
     EventMetadata:
       type: object
       description: |
-        Informações de transporte do evento: identificação única, origem e timestamp
-        de transmissão. Usados para roteamento, idempotência e rastreamento.
+        Transport information for the event: unique identification, origin, and transmission
+        timestamp. Used for routing, idempotency, and tracking.
       required:
         - eventId
         - source
@@ -156,25 +156,25 @@ components:
         eventId:
           type: string
           description: |
-            Identificador único do evento no contexto do sistema de origem.
-            Padrão recomendado: `{app}-{domain}-{entity-key}`.
-            Usado para idempotência — reenvios com o mesmo `eventId` retornam `202`.
+            Unique identifier of the event within the source system's context.
+            Recommended pattern: `{app}-{domain}-{entity-key}`.
+            Used for idempotency — resends with the same `eventId` return `202`.
           minLength: 1
           example: "crm-sales-order-7891"
         source:
           type: string
-          description: URI que identifica o sistema de origem do evento.
+          description: URI identifying the event's source system.
           minLength: 1
           example: "https://crm.example.com/"
         occurredAt:
           type: string
           format: date-time
-          description: Timestamp ISO 8601 do momento em que o evento foi transmitido ao RavenLedger.
+          description: ISO 8601 timestamp of when the event was transmitted to RavenLedger.
           example: "2024-06-04T14:22:00Z"
 
     AuditEventContent:
       type: object
-      description: Conteúdo auditado — o que aconteceu, quem fez e sobre qual dado.
+      description: Audited content — what happened, who did it, and on which data.
       required:
         - appInfo
         - user
@@ -193,49 +193,49 @@ components:
 
     AppInfo:
       type: object
-      description: Identificação da aplicação que gerou o evento.
+      description: Identification of the application that generated the event.
       required:
         - appname
         - domain
       properties:
         appname:
           type: string
-          description: Nome da aplicação de origem.
+          description: Name of the source application.
           minLength: 1
           example: crm-service
         domain:
           type: string
-          description: Domínio de negócio da aplicação (ex. sales, financeiro).
+          description: Business domain of the application (e.g. sales, finance).
           minLength: 1
           example: sales
         version:
           type: string
-          description: Versão da aplicação de origem.
+          description: Version of the source application.
           example: "3.2.1"
 
     AuditUser:
       type: object
-      description: Autor da operação registrada.
+      description: Author of the recorded operation.
       required:
         - id
       properties:
         id:
           type: string
-          description: Identificador do usuário no sistema de origem.
+          description: Identifier of the user in the source system.
           minLength: 1
           example: "usr-42"
         name:
           type: string
-          description: Nome legível do usuário.
+          description: Human-readable name of the user.
           example: John Doe
         role:
           type: string
-          description: Papel ou perfil do usuário no momento da operação.
+          description: Role or profile of the user at the time of the operation.
           example: admin
 
     Operation:
       type: object
-      description: Descrição da operação sobre dados que originou o evento.
+      description: Description of the data operation that originated the event.
       required:
         - type
         - entity
@@ -243,7 +243,7 @@ components:
       properties:
         type:
           type: string
-          description: Tipo de operação realizada sobre a entidade.
+          description: Type of operation performed on the entity.
           enum:
             - insert
             - update
@@ -251,28 +251,28 @@ components:
           example: insert
         entity:
           type: string
-          description: Nome da entidade ou tabela afetada pela operação.
+          description: Name of the entity or table affected by the operation.
           minLength: 1
           example: orders
         generatedAt:
           type: string
           format: date-time
-          description: Timestamp ISO 8601 de quando a operação foi gerada no sistema de origem.
+          description: ISO 8601 timestamp of when the operation was generated in the source system.
           example: "2024-06-04T14:21:58Z"
         transmittedAt:
           type: string
           format: date-time
           description: |
-            Timestamp ISO 8601 de quando o evento foi enviado ao RavenLedger.
-            A diferença entre `generatedAt` e `transmittedAt` permite detectar
-            latência ou falhas de transmissão.
+            ISO 8601 timestamp of when the event was sent to RavenLedger.
+            The difference between `generatedAt` and `transmittedAt` allows detecting
+            latency or transmission failures.
           example: "2024-06-04T14:22:00Z"
 
     Index:
       type: object
       description: |
-        Mapa livre de campos chave-valor definido pelo sistema cliente para facilitar
-        buscas no RavenLedger sem full scan no snapshot de dados.
+        Free-form map of key-value fields defined by the client system to facilitate
+        searches in RavenLedger without a full scan of the data snapshot.
       additionalProperties:
         type: string
       example:
@@ -282,9 +282,9 @@ components:
     EntitySnapshot:
       type: object
       description: |
-        Snapshot do estado da entidade no momento da operação. Estrutura livre,
-        definida pelo sistema cliente. Sua imutabilidade é garantida pelo RavenLedger
-        após recepção.
+        Snapshot of the entity's state at the time of the operation. Free-form structure,
+        defined by the client system. Its immutability is guaranteed by RavenLedger
+        after reception.
       additionalProperties: true
       example:
         id: "ORD-7891"
@@ -293,7 +293,7 @@ components:
 
     ValidationErrorResponse:
       type: object
-      description: Resposta de erro de validação (RFC 7807 — Problem Details).
+      description: Validation error response (RFC 7807 — Problem Details).
       required:
         - type
         - title
@@ -302,7 +302,7 @@ components:
       properties:
         type:
           type: string
-          description: URI que identifica o tipo de erro.
+          description: URI identifying the error type.
           example: "https://ravenledger.internal/errors/validation"
         title:
           type: string
@@ -318,7 +318,7 @@ components:
 
     ValidationError:
       type: object
-      description: Detalhe de um campo inválido ou ausente.
+      description: Detail of an invalid or missing field.
       required:
         - field
         - message
@@ -326,16 +326,16 @@ components:
         field:
           type: string
           description: |
-            Caminho dot-notation do campo com erro (ex. `metadata.source`, `event.operation.type`).
+            Dot-notation path of the field with the error (e.g. `metadata.source`, `event.operation.type`).
           example: "event.operation.type"
         message:
           type: string
-          description: Descrição legível do motivo da rejeição.
+          description: Human-readable description of the rejection reason.
           example: "Field 'event.operation.type' must be one of: insert, update, delete."
 
     ProblemDetails:
       type: object
-      description: Resposta de erro genérica (RFC 7807 — Problem Details).
+      description: Generic error response (RFC 7807 — Problem Details).
       required:
         - type
         - title
@@ -352,5 +352,5 @@ components:
           example: 401
         detail:
           type: string
-          description: Explicação legível do erro para uso em diagnóstico.
+          description: Human-readable explanation of the error for diagnostic purposes.
           example: "Bearer token is missing or invalid."

@@ -1,108 +1,108 @@
-# [FEATURE] FT-03 — Processamento e Persistência Imutável de AuditEvents (Register Service)
+# [FEATURE] FT-03 — AuditEvent Processing and Immutable Persistence (Register Service)
 
-## Descrição
+## Description
 
-**Wave 1 — MVP | Lean Inception: Registro Automático + Registro Imutável**
+**Wave 1 — MVP | Lean Inception: Automatic Registration + Immutable Registration**
 
-Esta feature implementa o serviço `raven-ledger.register`, responsável por consumir eventos da fila de mensagens e persistir cada AuditEvent no `LedgerDatabase` de forma imutável. A imutabilidade é a propriedade central de confiabilidade do RavenLedger: uma vez gravado, um registro não pode ser alterado ou removido — nem pelo próprio sistema, nem por administradores de banco de dados (via controle de permissões de role).
+This feature implements the `raven-ledger.register` service, responsible for consuming events from the message queue and persisting each AuditEvent in `LedgerDatabase` in an immutable fashion. Immutability is RavenLedger's central reliability property: once written, a record cannot be changed or removed — not by the system itself, nor by database administrators (via role permission controls).
 
-Além da imutabilidade por permissão, cada registro mantém uma **cadeia de hashes** que vincula criptograficamente cada entrada à anterior, permitindo detectar qualquer adulteração retroativa mesmo que alguém obtenha acesso direto ao banco.
+Beyond immutability through permissions, each record maintains a **hash chain** that cryptographically links each entry to the previous one, allowing detection of any retroactive tampering even if someone gains direct access to the database.
 
-A separação entre ingestão (FT-02) e persistência (esta feature) é uma decisão arquitetural deliberada: garante o SLA de 100ms na entrada sem comprometer a confiabilidade da gravação.
+The separation between ingestion (FT-02) and persistence (this feature) is a deliberate architectural decision: it guarantees the 100ms SLA at the entry point without compromising write reliability.
 
-**Dependências:**
-- **FT-01** — `LedgerDatabase` provisionado e acessível (PostgreSQL vazio, sem tabelas).
-- **FT-01** — Tópico Kafka `audit.events.received` criado e operacional.
-- **FT-02** — Serviço `raven-ledger.ingestion` publicando eventos no tópico.
+**Dependencies:**
+- **FT-01** — `LedgerDatabase` provisioned and accessible (empty PostgreSQL, no tables).
+- **FT-01** — Kafka topic `audit.events.received` created and operational.
+- **FT-02** — `raven-ledger.ingestion` service publishing events to the topic.
 
-**Cenários de negócio:**
-- **Happy path:** Evento na fila → lido pelo register → payload deserializado → hash calculado → persistido no LedgerDatabase → ACK enviado ao broker.
-- **Evento duplicado:** Mesmo `event_id` → registro ignorado silenciosamente (idempotência via UNIQUE constraint).
-- **Payload corrompido:** JSON inválido na fila → mensagem movida para dead-letter queue com log de erro.
-- **Banco indisponível:** Falha de conexão → NACK, mensagem retorna à fila para reprocessamento.
-- **Falha parcial:** Persistência bem-sucedida mas ACK perdido → duplicata bloqueada pela UNIQUE constraint no retry.
+**Business scenarios:**
+- **Happy path:** Event in queue → read by register → payload deserialized → hash calculated → persisted in LedgerDatabase → ACK sent to broker.
+- **Duplicate event:** Same `event_id` → record silently ignored (idempotency via UNIQUE constraint).
+- **Corrupted payload:** Invalid JSON in the queue → message moved to dead-letter queue with error log.
+- **Database unavailable:** Connection failure → NACK, message returns to queue for reprocessing.
+- **Partial failure:** Successful persistence but ACK lost → duplicate blocked by UNIQUE constraint on retry.
 
-## Descrição Técnica
+## Technical Description
 
-**Serviço:** `raven-ledger.register` (.NET 10, Background Worker — consumer via `Confluent.Kafka`)
+**Service:** `raven-ledger.register` (.NET 10, Background Worker — consumer via `Confluent.Kafka`)
 
-**Owner do schema:** Este serviço é o *owner* do `LedgerDatabase`. A FT-01 provisiona o banco vazio; esta feature cria as tabelas via **FluentMigrator** na inicialização do serviço. O número da migration segue o padrão `YYYYMMDDHHmm`.
+**Schema owner:** This service is the *owner* of `LedgerDatabase`. FT-01 provisions the empty database; this feature creates the tables via **FluentMigrator** at service startup. The migration number follows the `YYYYMMDDHHmm` pattern.
 
 ---
 
-### Bibliotecas Utilizadas
+### Libraries Used
 
-| Biblioteca | Papel neste serviço |
+| Library | Role in this service |
 |---|---|
-| **Confluent.Kafka** | Client oficial Kafka para consumo do tópico `audit.events.received` e publicação no `audit.events.deadletter`; gestão de ACK/NACK e retry |
-| **Dapper** + **Npgsql** | Acesso ao PostgreSQL — SELECT do hash anterior e INSERT em `ledger_entries`; Npgsql como driver ADO.NET |
-| **FluentMigrator** | Criação e versionamento do schema do `LedgerDatabase` na inicialização do serviço |
-| **Serilog** + **Serilog.Sinks.OpenTelemetry** | Logging estruturado em JSON; emissão via OTLP para o Grafana Alloy |
-| **OpenTelemetry .NET SDK** | Instrumentação de métricas e traces; exportação via OTLP para o Grafana Alloy |
+| **Confluent.Kafka** | Official Kafka client for consuming the `audit.events.received` topic and publishing to `audit.events.deadletter`; ACK/NACK and retry management |
+| **Dapper** + **Npgsql** | PostgreSQL access — SELECT of the previous hash and INSERT into `ledger_entries`; Npgsql as the ADO.NET driver |
+| **FluentMigrator** | Creation and versioning of the `LedgerDatabase` schema at service startup |
+| **Serilog** + **Serilog.Sinks.OpenTelemetry** | Structured JSON logging; emission via OTLP to Grafana Alloy |
+| **OpenTelemetry .NET SDK** | Metrics and traces instrumentation; export via OTLP to Grafana Alloy |
 
-**Bibliotecas de teste:** Bogus (geração de dados), NSubstitute (mocks/stubs), AutoBogus.NSubstitute (fakes automáticos), Shouldly (asserções), Coverlet.Collector (cobertura de código).
+**Test libraries:** Bogus (data generation), NSubstitute (mocks/stubs), AutoBogus.NSubstitute (automatic fakes), Shouldly (assertions), Coverlet.Collector (code coverage).
 
 ---
 
-### Configuração e Segredos
+### Configuration and Secrets
 
-A separação entre configuração e segredos segue a política definida nas restrições técnicas do projeto:
+The separation between configuration and secrets follows the policy defined in the project's technical constraints:
 
-| Ambiente | Configuração (não-sensível) | Segredos |
+| Environment | Configuration (non-sensitive) | Secrets |
 |---|---|---|
-| **Desenvolvimento local** | `appsettings.Development.json` | `dotnet user-secrets` — connection string PostgreSQL e endereço/credenciais Kafka |
-| **Produção** | Variáveis de ambiente não-sensíveis | **OpenBao** em runtime — connection string, credenciais Kafka e certificados TLS |
+| **Local development** | `appsettings.Development.json` | `dotnet user-secrets` — PostgreSQL connection string and Kafka address/credentials |
+| **Production** | Non-sensitive environment variables | **OpenBao** at runtime — connection string, Kafka credentials, and TLS certificates |
 
-O `appsettings.Development.json` **não deve conter nenhum segredo** — apenas overrides de configuração não-sensíveis (ex.: nível de log, nome do tópico).
+`appsettings.Development.json` **must not contain any secrets** — only non-sensitive configuration overrides (e.g.: log level, topic name).
 
 ---
 
-### Fluxo de Processamento
+### Processing Flow
 
-O diagrama abaixo representa o ciclo completo de uma mensagem desde o tópico Kafka até o ACK, incluindo os caminhos de exceção (dead-letter e NACK para reprocessamento).
+The diagram below represents the complete message cycle from the Kafka topic to the ACK, including exception paths (dead-letter and NACK for reprocessing).
 
 ```mermaid
 flowchart TD
     Q[("Kafka<br/>audit.events.received")]
     C["Consumer<br/>raven-ledger.register"]
-    D{"Deserializa<br/>CloudEvent 1.0?"}
+    D{"Deserialize<br/>CloudEvent 1.0?"}
     DL[("Kafka<br/>audit.events.deadletter")]
-    ACK_DL["ACK<br/>(descarta da fila principal)"]
-    DUP{"event_id<br/>já existe?"}
-    ACK_DUP["ACK<br/>(ignora silenciosamente)"]
-    PREV["SELECT id, hash<br/>do último registro confirmado<br/>(READ COMMITTED)"]
-    HASH["Calcula SHA-256<br/>(campos mapeados + data_json<br/>+ received_at + prev_hash)"]
-    INS["INSERT ledger_entries<br/>(dentro da mesma transação)"]
+    ACK_DL["ACK<br/>(discards from main queue)"]
+    DUP{"event_id<br/>already exists?"}
+    ACK_DUP["ACK<br/>(ignores silently)"]
+    PREV["SELECT id, hash<br/>from last committed record<br/>(READ COMMITTED)"]
+    HASH["Calculate SHA-256<br/>(mapped fields + data_json<br/>+ received_at + prev_hash)"]
+    INS["INSERT ledger_entries<br/>(within the same transaction)"]
     COMMIT["COMMIT"]
-    ACK_OK["ACK ao broker"]
-    NACK["NACK<br/>(mensagem retorna à fila)"]
+    ACK_OK["ACK to broker"]
+    NACK["NACK<br/>(message returns to queue)"]
 
     Q --> C
     C --> D
-    D -- "JSON inválido ou<br/>campos obrigatórios ausentes" --> DL --> ACK_DL
+    D -- "Invalid JSON or<br/>missing required fields" --> DL --> ACK_DL
     D -- "OK" --> DUP
-    DUP -- "Duplicado" --> ACK_DUP
-    DUP -- "Novo" --> PREV
+    DUP -- "Duplicate" --> ACK_DUP
+    DUP -- "New" --> PREV
     PREV --> HASH
     HASH --> INS
-    INS -- "Sucesso" --> COMMIT --> ACK_OK
-    INS -- "Erro de banco" --> NACK
+    INS -- "Success" --> COMMIT --> ACK_OK
+    INS -- "Database error" --> NACK
     NACK -.->|"retry"| Q
 ```
 
 ---
 
-### Modelo de Entidade
+### Entity Model
 
-A tabela `ledger_entries` não possui relacionamentos com outras tabelas — é uma estrutura self-contained, append-only. O diagrama representa as colunas, tipos e a auto-referência lógica da cadeia de hashes (não é uma FK real; a relação é verificada pela aplicação).
+The `ledger_entries` table has no relationships with other tables — it is a self-contained, append-only structure. The diagram represents the columns, types, and the logical self-reference of the hash chain (not a real FK; the relationship is verified by the application).
 
 ```mermaid
 erDiagram
     ledger_entries {
         BIGINT id PK "GENERATED ALWAYS AS IDENTITY"
-        VARCHAR_128 event_id "NOT NULL — idempotência (UK)"
-        VARCHAR_1024 source "NOT NULL — URI do sistema emissor"
-        VARCHAR_255 correlation_id "NULL — identificador de operação distribuída (opcional)"
+        VARCHAR_128 event_id "NOT NULL — idempotency (UK)"
+        VARCHAR_1024 source "NOT NULL — issuing system URI"
+        VARCHAR_255 correlation_id "NULL — distributed operation identifier (optional)"
         VARCHAR_128 app_name "NOT NULL — data.appInfo.appname"
         VARCHAR_32 app_version "NULL — data.appInfo.version"
         VARCHAR_100 domain "NOT NULL — data.appInfo.domain"
@@ -112,59 +112,59 @@ erDiagram
         VARCHAR_100 operation_type "NOT NULL — data.operation.type"
         VARCHAR_255 entity "NOT NULL — data.operation.entity"
         TIMESTAMPTZ generated_at "NOT NULL — data.operation.generatedAt"
-        TIMESTAMPTZ transmitted_at "NOT NULL — time do envelope CloudEvent"
+        TIMESTAMPTZ transmitted_at "NOT NULL — CloudEvent envelope time"
         TIMESTAMPTZ received_at "NOT NULL — DEFAULT NOW()"
         JSONB index_payload "NULL — data.index"
         JSONB data_payload "NOT NULL — data.data"
-        CHAR_64 hash "NOT NULL — SHA-256 da cadeia (UK)"
-        CHAR_64 previous_hash "NULL — hash anterior (NULL no genesis)"
-        BIGINT previous_id "NULL — FK para id do registro anterior"
+        CHAR_64 hash "NOT NULL — chain SHA-256 (UK)"
+        CHAR_64 previous_hash "NULL — previous hash (NULL in genesis)"
+        BIGINT previous_id "NULL — FK to previous record id"
     }
 
-    ledger_entries ||--o| ledger_entries : "previous_id → id (FK)<br/>previous_hash → hash (criptográfico)"
+    ledger_entries ||--o| ledger_entries : "previous_id → id (FK)<br/>previous_hash → hash (cryptographic)"
 ```
 
 ---
 
-### Mapeamento CloudEvent → ledger_entries
+### CloudEvent → ledger_entries Mapping
 
-O envelope do evento segue a especificação **CloudEvents 1.0** (cf. `docs/systemDesign/event.json`).
+The event envelope follows the **CloudEvents 1.0** specification (cf. `docs/systemDesign/event.json`).
 
-| Campo CloudEvent                   | Coluna            | Nulidade | Observação                                                        |
-|------------------------------------|-------------------|----------|-------------------------------------------------------------------|
-| `id`                               | `event_id`        | NOT NULL | Chave de idempotência                                             |
-| `source`                           | `source`          | NOT NULL | URI do sistema emissor                                            |
-| `metadata.correlationId`           | `correlation_id`  | NULL     | Opcional; vincula eventos de diferentes serviços da mesma transação |
-| `time`                             | `transmitted_at`  | NOT NULL | Campo canônico da spec CloudEvents 1.0                            |
-| `data.appInfo.appname`             | `app_name`        | NOT NULL |                                                                   |
-| `data.appInfo.version`             | `app_version`     | NULL     |                                                                   |
-| `data.appInfo.domain`              | `domain`          | NOT NULL |                                                                   |
-| `data.user.id`                     | `user_id`         | NOT NULL |                                                                   |
-| `data.user.name`                   | `user_name`       | NOT NULL |                                                                   |
-| `data.user.role`                   | `user_role`       | NULL     |                                                                   |
-| `data.operation.type`              | `operation_type`  | NOT NULL | insert / update / delete / qualquer string                        |
-| `data.operation.entity`            | `entity`          | NOT NULL | Nome da entidade afetada                                          |
-| `data.operation.generatedAt`       | `generated_at`    | NOT NULL | Quando a operação ocorreu no sistema cliente                      |
-| `data.index`                       | `index_payload`   | NULL     | JSONB com campos customizados de indexação                        |
-| `data.data`                        | `data_payload`    | NOT NULL | JSONB com o objeto de negócio auditado                            |
-| *(gerado pelo register)*           | `received_at`     | NOT NULL | `DEFAULT NOW()` no INSERT                                         |
-| *(calculado antes do INSERT)*      | `hash`            | NOT NULL | Ver algoritmo abaixo                                              |
-| *(lido do último registro)*        | `previous_hash`   | NULL     | NULL somente no registro genesis                                  |
-| *(lido do último registro)*        | `previous_id`     | NULL     | `id` do registro anterior; NULL somente no registro genesis       |
+| CloudEvent field                   | Column            | Nullability | Notes                                                             |
+|------------------------------------|-------------------|-------------|-------------------------------------------------------------------|
+| `id`                               | `event_id`        | NOT NULL    | Idempotency key                                                   |
+| `source`                           | `source`          | NOT NULL    | Issuing system URI                                                |
+| `metadata.correlationId`           | `correlation_id`  | NULL        | Optional; links events from different services in the same transaction |
+| `time`                             | `transmitted_at`  | NOT NULL    | Canonical field per the CloudEvents 1.0 spec                     |
+| `data.appInfo.appname`             | `app_name`        | NOT NULL    |                                                                   |
+| `data.appInfo.version`             | `app_version`     | NULL        |                                                                   |
+| `data.appInfo.domain`              | `domain`          | NOT NULL    |                                                                   |
+| `data.user.id`                     | `user_id`         | NOT NULL    |                                                                   |
+| `data.user.name`                   | `user_name`       | NOT NULL    |                                                                   |
+| `data.user.role`                   | `user_role`       | NULL        |                                                                   |
+| `data.operation.type`              | `operation_type`  | NOT NULL    | insert / update / delete / any string                             |
+| `data.operation.entity`            | `entity`          | NOT NULL    | Name of the affected entity                                       |
+| `data.operation.generatedAt`       | `generated_at`    | NOT NULL    | When the operation occurred in the client system                  |
+| `data.index`                       | `index_payload`   | NULL        | JSONB with custom indexing fields                                 |
+| `data.data`                        | `data_payload`    | NOT NULL    | JSONB with the audited business object                            |
+| *(generated by register)*          | `received_at`     | NOT NULL    | `DEFAULT NOW()` on INSERT                                         |
+| *(calculated before INSERT)*       | `hash`            | NOT NULL    | See algorithm below                                               |
+| *(read from last record)*          | `previous_hash`   | NULL        | NULL only in the genesis record                                   |
+| *(read from last record)*          | `previous_id`     | NULL        | `id` of the previous record; NULL only in the genesis record      |
 
-> **`contenttype`** (campo presente no `event.json`) é um atributo de extensão CloudEvents 0.3, não mapeado para coluna dedicada.
+> **`contenttype`** (field present in `event.json`) is a CloudEvents 0.3 extension attribute, not mapped to a dedicated column.
 >
-> **`data.operation.transmittedAt`** e o campo de envelope `time` carregam o mesmo instante. O mapeamento usa `time` (envelope), pois é o campo canônico da especificação CloudEvents 1.0.
+> **`data.operation.transmittedAt`** and the envelope field `time` carry the same instant. The mapping uses `time` (envelope), as it is the canonical field per the CloudEvents 1.0 specification.
 
 ---
 
-### Schema do LedgerDatabase
+### LedgerDatabase Schema
 
-**Migration:** criada via **FluentMigrator** na inicialização do serviço. O DDL segue as convenções do projeto (`db-conventions`).
+**Migration:** created via **FluentMigrator** at service startup. The DDL follows the project conventions (`db-conventions`).
 
 #### Constraints
 
-| Constraint | Tipo | Campo(s) |
+| Constraint | Type | Field(s) |
 |---|---|---|
 | `pk_ledger_entries` | PRIMARY KEY | `id` |
 | `uk_ledger_entries__event_id` | UNIQUE | `event_id` |
@@ -172,34 +172,34 @@ O envelope do evento segue a especificação **CloudEvents 1.0** (cf. `docs/syst
 | `ck_ledger_entries__hash_length` | CHECK | `LENGTH(hash) = 64` |
 | `fk_ledger_entries__previous_id` | FOREIGN KEY | `previous_id` → `ledger_entries(id)` |
 
-#### Índices
+#### Indexes
 
-As constraints `PRIMARY KEY` e `UNIQUE` já criam índices implícitos que cobrem todas as operações do próprio serviço:
+The `PRIMARY KEY` and `UNIQUE` constraints already create implicit indexes that cover all of the service's own operations:
 
-| Índice (implícito) | Campo | Operação coberta |
+| Implicit index | Field | Operation covered |
 |---|---|---|
-| `pk_ledger_entries` | `id` | `SELECT ORDER BY id DESC LIMIT 1` para leitura do hash e id anterior |
-| `uk_ledger_entries__event_id` | `event_id` | Checagem de idempotência antes do INSERT |
-| `uk_ledger_entries__hash` | `hash` | Garantia de unicidade da cadeia |
+| `pk_ledger_entries` | `id` | `SELECT ORDER BY id DESC LIMIT 1` to read the previous hash and id |
+| `uk_ledger_entries__event_id` | `event_id` | Idempotency check before INSERT |
+| `uk_ledger_entries__hash` | `hash` | Chain uniqueness guarantee |
 
-| Índice explícito | Campo | Tipo | Motivação |
+| Explicit index | Field | Type | Rationale |
 |---|---|---|---|
-| `idx_ledger_entries__previous_id` | `previous_id` | B-tree | Suporte ao JOIN de verificação da cadeia (`ON id = previous_id`) |
-| `idx_ledger_entries__correlation_id` | `correlation_id` | B-tree parcial (`WHERE correlation_id IS NOT NULL`) | Rastreabilidade por operação distribuída (`?correlation_id=`) |
+| `idx_ledger_entries__previous_id` | `previous_id` | B-tree | Support for chain verification JOIN (`ON id = previous_id`) |
+| `idx_ledger_entries__correlation_id` | `correlation_id` | Partial B-tree (`WHERE correlation_id IS NOT NULL`) | Traceability by distributed operation (`?correlation_id=`) |
 
-Índices adicionais para suportar consultas da interface de visualização serão definidos na feature correspondente, quando os padrões de acesso estiverem especificados.
+Additional indexes to support queries from the visualization interface will be defined in the corresponding feature, once the access patterns are specified.
 
 ---
 
-### Algoritmo de Hash
+### Hash Algorithm
 
-O hash de cada entrada é calculado **antes do INSERT**, na camada de aplicação (C#), com SHA-256 sobre a concatenação canônica de todos os campos mapeados.
+The hash for each entry is calculated **before the INSERT**, in the application layer (C#), with SHA-256 over the canonical concatenation of all mapped fields.
 
-#### Por que JSON bruto para `data_payload` e `index_payload`?
+#### Why raw JSON for `data_payload` and `index_payload`?
 
-O PostgreSQL normaliza JSONB ao armazenar (ordena chaves, remove espaços). Se o hash fosse calculado sobre `data_payload::text` lido de volta do banco, o resultado seria diferente do hash original — tornando a verificação da cadeia impossível sem re-executar o INSERT. A solução é usar o JSON bruto extraído do CloudEvent **antes** da conversão para `JsonDocument`, garantindo byte-fidelidade para o hash enquanto o banco armazena JSONB para queries.
+PostgreSQL normalizes JSONB when storing (sorts keys, removes spaces). If the hash were calculated over `data_payload::text` read back from the database, the result would differ from the original hash — making chain verification impossible without re-executing the INSERT. The solution is to use the raw JSON extracted from the CloudEvent **before** conversion to `JsonDocument`, guaranteeing byte-fidelity for the hash while the database stores JSONB for queries.
 
-#### Formato canônico
+#### Canonical format
 
 ```
 hash = SHA-256(
@@ -225,33 +225,33 @@ hash = SHA-256(
 )
 ```
 
-O resultado é convertido para hexadecimal minúsculo (64 caracteres) antes de ser armazenado.
+The result is converted to lowercase hexadecimal (64 characters) before being stored.
 
-- `index_payload_raw_json` — string JSON extraída de `data.index` do CloudEvent original, **antes** de qualquer parse C#. Vazio (`""`) quando o campo estiver ausente.
-- `data_payload_raw_json` — string JSON extraída de `data.data` do CloudEvent original, **antes** de qualquer parse C#.
-- Campos `NULL` em valores escalares (`app_version`, `user_role`) são representados como string vazia `""` na concatenação.
+- `index_payload_raw_json` — JSON string extracted from `data.index` of the original CloudEvent, **before** any C# parsing. Empty (`""`) when the field is absent.
+- `data_payload_raw_json` — JSON string extracted from `data.data` of the original CloudEvent, **before** any C# parsing.
+- `NULL` values in scalar fields (`app_version`, `user_role`) are represented as an empty string `""` in the concatenation.
 
-#### Fluxo dentro da transação
+#### Flow within the transaction
 
 ```mermaid
 flowchart TD
-    TX_START["Início da transação<br/>(READ COMMITTED)"]
+    TX_START["Transaction start<br/>(READ COMMITTED)"]
     QUERY["SELECT id, hash<br/>FROM ledger_entries<br/>ORDER BY id DESC LIMIT 1"]
-    HAS_ROW{"Existe<br/>registro anterior?"}
-    PREV_HASH["prev_hash = hash do registro lido<br/>prev_id = id do registro lido"]
+    HAS_ROW{"Predecessor record<br/>exists?"}
+    PREV_HASH["prev_hash = hash of read record<br/>prev_id = id of read record"]
     GENESIS_VAL["prev_hash = 'GENESIS'<br/>prev_id = NULL"]
     NOW_VAL["received_at = NOW()"]
-    CONCAT["Concatena todos os campos mapeados<br/>usando JSON bruto para data_payload<br/>e index_payload"]
-    SHA["SHA-256(concatenação canônica)"]
-    HEX["Converte para hexadecimal minúsculo"]
-    RESULT["hash = 64 caracteres"]
-    INSERT["INSERT INTO ledger_entries<br/>(todos os campos + hash + previous_hash + previous_id)<br/>data_payload e index_payload como JSONB"]
+    CONCAT["Concatenate all mapped fields<br/>using raw JSON for data_payload<br/>and index_payload"]
+    SHA["SHA-256(canonical concatenation)"]
+    HEX["Convert to lowercase hexadecimal"]
+    RESULT["hash = 64 characters"]
+    INSERT["INSERT INTO ledger_entries<br/>(all fields + hash + previous_hash + previous_id)<br/>data_payload and index_payload as JSONB"]
     COMMIT["COMMIT"]
 
     TX_START --> QUERY
     QUERY --> HAS_ROW
-    HAS_ROW -- "Sim" --> PREV_HASH --> NOW_VAL
-    HAS_ROW -- "Não (genesis)" --> GENESIS_VAL --> NOW_VAL
+    HAS_ROW -- "Yes" --> PREV_HASH --> NOW_VAL
+    HAS_ROW -- "No (genesis)" --> GENESIS_VAL --> NOW_VAL
     NOW_VAL --> CONCAT
     CONCAT --> SHA
     SHA --> HEX
@@ -262,9 +262,9 @@ flowchart TD
 
 ---
 
-### Cadeia de Hash (Hash Chain)
+### Hash Chain
 
-Cada registro aponta para o hash do registro anterior, formando uma cadeia imutável. Qualquer adulteração em um registro invalida todos os hashes posteriores, tornando a fraude imediatamente detectável por uma varredura sequencial.
+Each record points to the hash of the previous record, forming an immutable chain. Any tampering with a record invalidates all subsequent hashes, making fraud immediately detectable through a sequential scan.
 
 ```mermaid
 flowchart LR
@@ -276,264 +276,264 @@ flowchart LR
     R4["id: 4<br/>previous_id: 2<br/>previous_hash: H2"]
     R5["id: 5<br/>previous_id: 3<br/>previous_hash: H3"]
 
-    G -->|"referência lógica"| R1
+    G -->|"logical reference"| R1
     R1 -->|"previous_id / previous_hash"| R2
     R1 -->|"previous_id / previous_hash"| R3
     R2 -->|"previous_id / previous_hash"| R4
     R3 -->|"previous_id / previous_hash"| R5
 ```
 
-Sob concorrência, a cadeia pode se bifurcar: dois registros inseridos simultaneamente podem ler o mesmo predecessor confirmado e ambos referenciar seu `id` e `hash`. O resultado é uma **árvore enraizada no genesis**, não necessariamente uma lista linear. Isso é esperado e não indica adulteração — bifurcações são detectáveis pela própria estrutura do grafo (dois registros com o mesmo `previous_id`).
+Under concurrency, the chain may fork: two records inserted simultaneously may read the same confirmed predecessor and both reference its `id` and `hash`. The result is a **tree rooted at genesis**, not necessarily a linear list. This is expected and does not indicate tampering — forks are detectable from the graph structure itself (two records with the same `previous_id`).
 
-A cadeia possui dois mecanismos complementares de integridade:
+The chain has two complementary integrity mechanisms:
 
-| Mecanismo | Campo | Propósito |
+| Mechanism | Field | Purpose |
 |---|---|---|
-| **Estrutural** | `previous_id` (FK) | Navegação relacional — permite percorrer a árvore via JOIN e detecta registros sem predecessor válido |
-| **Criptográfico** | `previous_hash` (SHA-256) | Detecta adulteração retroativa — qualquer alteração em campos de um registro invalida todos os hashes no(s) ramo(s) descendente(s) |
+| **Structural** | `previous_id` (FK) | Relational navigation — allows traversing the tree via JOIN and detects records without a valid predecessor |
+| **Cryptographic** | `previous_hash` (SHA-256) | Detects retroactive tampering — any change to a record's fields invalidates all hashes in the descendant branch(es) |
 
-**Verificação da cadeia:** percorre todos os caminhos do genesis até as folhas (registros sem descendentes). Em cada caminho, recalcula o hash de cada registro — extraindo os campos escalares e os JSON de `data_payload::text` / `index_payload::text` — e valida que `previous_hash` do registro atual corresponde ao `hash` do registro apontado por `previous_id`. Se qualquer registro foi adulterado, removido ou inserido com referência inválida, ao menos um dos mecanismos quebrará naquele ramo.
+**Chain verification:** traverses all paths from genesis to leaves (records without descendants). On each path, recalculates the hash of each record — extracting scalar fields and the JSON from `data_payload::text` / `index_payload::text` — and validates that the `previous_hash` of the current record matches the `hash` of the record pointed to by `previous_id`. If any record was tampered with, removed, or inserted with an invalid reference, at least one of the mechanisms will break on that branch.
 
-> **Atenção:** durante a verificação, os campos JSONB devem ser lidos como `::text` e re-normalizados da mesma forma que foram gerados originalmente (usando o JSON bruto). A aplicação de verificação precisa ter acesso ao JSON bruto original ou reproduzir a normalização JSONB do PostgreSQL para recalcular o hash corretamente.
-
----
-
-### Serialização da Cadeia
-
-Para manter a integridade criptográfica, a única garantia necessária é que o registro lido como predecessor já esteja **confirmado** no banco no momento da leitura — o que o isolamento padrão **READ COMMITTED** do PostgreSQL assegura. Não há lock adicional.
-
-Sob concorrência, múltiplas threads ou instâncias podem ler o mesmo predecessor e inserir registros em paralelo, bifurcando a cadeia. Isso é um comportamento esperado e não compromete a verificabilidade (ver seção Cadeia de Hash).
-
-A sequência dentro da transação é: **ler `id` e `hash` do último registro confirmado → calcular o novo hash na aplicação → executar o INSERT (incluindo `previous_id` e `previous_hash`) → COMMIT**.
+> **Note:** during verification, JSONB fields must be read as `::text` and re-normalized in the same way they were originally generated (using the raw JSON). The verification application needs access to the original raw JSON or must reproduce PostgreSQL's JSONB normalization to correctly recalculate the hash.
 
 ---
 
-### Permissões e Controle de Acesso
+### Chain Serialization
 
-O controle de acesso é o primeiro nível de garantia de imutabilidade.
+To maintain cryptographic integrity, the only guarantee needed is that the record read as a predecessor is already **committed** in the database at the time of reading — which PostgreSQL's default **READ COMMITTED** isolation ensures. No additional lock is required.
+
+Under concurrency, multiple threads or instances may read the same predecessor and insert records in parallel, forking the chain. This is expected behavior and does not compromise verifiability (see Hash Chain section).
+
+The sequence within the transaction is: **read `id` and `hash` from the last committed record → calculate the new hash in the application → execute the INSERT (including `previous_id` and `previous_hash`) → COMMIT**.
+
+---
+
+### Permissions and Access Control
+
+Access control is the first level of immutability guarantee.
 
 | Role           | SELECT | INSERT | UPDATE | DELETE | TRUNCATE | Sequence     |
 |----------------|:------:|:------:|:------:|:------:|:--------:|:------------:|
 | `register_app` | ✅     | ✅     | ❌     | ❌     | ❌       | USAGE        |
 | `ledger_dba`   | ✅     | ✅     | ✅     | ✅     | ❌       | USAGE+SELECT |
 
-- **`register_app`** — usuário de aplicação do `raven-ledger.register`. `UPDATE` e `DELETE` revogados explicitamente.
-- **`ledger_dba`** — role de administração. `UPDATE` e `DELETE` existem para operações de manutenção autorizadas e jamais são exercidos pelo fluxo normal da aplicação.
+- **`register_app`** — application user for `raven-ledger.register`. `UPDATE` and `DELETE` explicitly revoked.
+- **`ledger_dba`** — administration role. `UPDATE` and `DELETE` exist for authorized maintenance operations and are never exercised in normal application flow.
 
 ---
 
 ### Dead-letter Queue
 
-Tópico Kafka: `audit.events.deadletter`
+Kafka topic: `audit.events.deadletter`
 
-| Condição                                                    | Destino      |
+| Condition                                                   | Destination  |
 |-------------------------------------------------------------|--------------|
-| JSON inválido / não deserializável como CloudEvent 1.0      | Dead-letter  |
-| Campos obrigatórios ausentes (`event_id`, `source`, `type`) | Dead-letter  |
-| Campo `data.data` ausente ou não serializável como JSON     | Dead-letter  |
-| Falha de conexão com o banco                                | NACK → retry |
-| Timeout de banco                                            | NACK → retry |
-| Erro transitório de infraestrutura                          | NACK → retry |
+| Invalid JSON / not deserializable as CloudEvents 1.0        | Dead-letter  |
+| Missing required fields (`event_id`, `source`, `type`)      | Dead-letter  |
+| `data.data` field absent or not serializable as JSON        | Dead-letter  |
+| Database connection failure                                 | NACK → retry |
+| Database timeout                                            | NACK → retry |
+| Transient infrastructure error                              | NACK → retry |
 
 ---
 
-### Observabilidade
+### Observability
 
-#### Logs Estruturados
+#### Structured Logs
 
-O serviço emite logs estruturados via **Serilog**, configurado com `Serilog.Sinks.OpenTelemetry` para exportação via OTLP. Pipeline de ingestão:
+The service emits structured logs via **Serilog**, configured with `Serilog.Sinks.OpenTelemetry` for export via OTLP. Ingestion pipeline:
 
-**Serilog (serviço)** → **Grafana Alloy (OTLP)** → **Loki** → **Grafana**
+**Serilog (service)** → **Grafana Alloy (OTLP)** → **Loki** → **Grafana**
 
-| Evento                      | Campos                                                                    |
+| Event                       | Fields                                                                    |
 |-----------------------------|---------------------------------------------------------------------------|
-| `event_persisted`           | `event_id`, `entity`, `domain`, `operation_type`, `correlation_id` (quando presente), `processing_time_ms`  |
+| `event_persisted`           | `event_id`, `entity`, `domain`, `operation_type`, `correlation_id` (when present), `processing_time_ms`  |
 | `event_duplicate_ignored`   | `event_id`                                                                |
 | `event_processing_failed`   | `event_id`, `error`, `retry_count`                                        |
 | `event_dead_lettered`       | `event_id`, `reason`                                                      |
 
-#### Métricas e Traces
+#### Metrics and Traces
 
-Métricas e traces são instrumentados via **OpenTelemetry .NET SDK** e exportados via OTLP para o Grafana Alloy:
+Metrics and traces are instrumented via the **OpenTelemetry .NET SDK** and exported via OTLP to Grafana Alloy:
 
-| Sinal | Pipeline |
+| Signal | Pipeline |
 |---|---|
-| **Métricas** | OpenTelemetry SDK → Grafana Alloy (OTLP) → Prometheus → Grafana |
+| **Metrics** | OpenTelemetry SDK → Grafana Alloy (OTLP) → Prometheus → Grafana |
 | **Traces** | OpenTelemetry SDK → Grafana Alloy (OTLP) → Tempo → Grafana |
 
 ---
 
-### Testes de Carga (k6)
+### Load Tests (k6)
 
-O script k6 é versionado no repositório junto ao serviço `raven-ledger.register`, conforme as restrições técnicas do projeto.
+The k6 script is versioned in the repository alongside the `raven-ledger.register` service, as per the project's technical constraints.
 
-**SLOs a validar:**
+**SLOs to validate:**
 
-| Indicador | SLO |
+| Indicator | SLO |
 |---|---|
-| Taxa de processamento bem-sucedido | > 99,9% |
-| Lag da fila em operação normal | < 1.000 mensagens |
-| Tempo de processamento P99 | < 500ms |
+| Successful processing rate | > 99.9% |
+| Queue lag under normal operation | < 1,000 messages |
+| P99 processing time | < 500ms |
 
-**Cenário mínimo:**
-- Publicar mensagens no tópico `audit.events.received` em volume e cadência representativos da operação normal
-- Medir o tempo entre publicação e confirmação de persistência (via polling em `ledger_entries` ou marcador de log estruturado)
-- Verificar que > 99,9% das mensagens são persistidas com sucesso dentro do SLO de P99
+**Minimum scenario:**
+- Publish messages to the `audit.events.received` topic at a volume and cadence representative of normal operation
+- Measure the time between publication and persistence confirmation (via polling on `ledger_entries` or structured log marker)
+- Verify that > 99.9% of messages are successfully persisted within the P99 SLO
 
-**Exportação de métricas:** k6 exporta para **Prometheus**; visualização e alertas via **Grafana**, consistente com a stack de observabilidade do projeto.
+**Metrics export:** k6 exports to **Prometheus**; visualization and alerts via **Grafana**, consistent with the project's observability stack.
 
 ---
 
-### Análise Estática
+### Static Analysis
 
-| Ferramenta | Momento de execução | Comportamento em violação |
+| Tool | Execution time | Behavior on violation |
 |---|---|---|
-| **StyleCop** | Build-time via Roslyn | Build quebra — nenhuma violação silenciosa |
-| **Roslynator** | Build-time via Roslyn | Build quebra |
+| **StyleCop** | Build-time via Roslyn | Build fails — no silent violations |
+| **Roslynator** | Build-time via Roslyn | Build fails |
 
-Supressões (`#pragma warning disable`, `[SuppressMessage]`) são proibidas sem justificativa documentada no mesmo arquivo.
+Suppressions (`#pragma warning disable`, `[SuppressMessage]`) are prohibited without documented justification in the same file.
 
 ---
 
-## Critérios de Aceite
+## Acceptance Criteria
 
-- [ ] Migration de criação da tabela `ledger_entries` executa ao inicializar o serviço e cria a tabela com todos os campos, constraints, índices, permissões e comentários definidos
-- [ ] Evento publicado na fila é consumido e persistido no LedgerDatabase
-- [ ] Todos os campos do mapeamento CloudEvent → `ledger_entries` estão corretamente populados (incluindo `spec_version`, `app_version`, `user_role`, `index_payload`)
-- [ ] `data_payload` contém o objeto de negócio de `data.data` armazenado como JSONB
-- [ ] `hash` é calculado corretamente segundo o algoritmo canônico definido, usando o JSON bruto de `data_payload` e `index_payload`
-- [ ] `previous_hash` aponta para o `hash` do registro com `id` imediatamente anterior; primeiro registro tem `previous_hash = NULL`
-- [ ] `correlation_id` armazenado corretamente quando presente no evento; `NULL` quando ausente
-- [ ] Evento com `event_id` já existente é ignorado sem erro (idempotência via `uk_ledger_entries__event_id`)
-- [ ] Usuário de aplicação `register_app` não consegue executar UPDATE ou DELETE em `ledger_entries`
-- [ ] Payload corrompido (JSON inválido, campos obrigatórios ausentes ou `data.data` inválido) vai para `audit.events.deadletter` sem travar o consumer
-- [ ] Falha de banco resulta em NACK e reprocessamento (sem perda de mensagem)
-- [ ] Log `event_persisted` emitido com campos corretos para cada gravação
-- [ ] Serviço retoma processamento automaticamente após reconexão com broker ou banco
-- [ ] Varredura da árvore de hashes não encontra inconsistências após 1.000 inserções concorrentes — cada registro possui `previous_hash` igual ao `hash` do registro apontado por `previous_id`
-- [ ] Build passa sem violações de **StyleCop** ou **Roslynator** (build quebra em qualquer violação)
-- [ ] **SonarQube** quality gate passa na PR — cobertura acima do threshold definido, sem novas vulnerabilidades ou code smells bloqueantes
-- [ ] Script k6 valida P99 < 500ms no cenário de carga nominal; métricas exportadas e visíveis no Prometheus/Grafana
+- [ ] Migration creating the `ledger_entries` table executes at service startup and creates the table with all defined fields, constraints, indexes, permissions, and comments
+- [ ] Event published to the queue is consumed and persisted in LedgerDatabase
+- [ ] All fields in the CloudEvent → `ledger_entries` mapping are correctly populated (including `spec_version`, `app_version`, `user_role`, `index_payload`)
+- [ ] `data_payload` contains the business object from `data.data` stored as JSONB
+- [ ] `hash` is correctly calculated according to the defined canonical algorithm, using the raw JSON of `data_payload` and `index_payload`
+- [ ] `previous_hash` points to the `hash` of the record with the immediately preceding `id`; the first record has `previous_hash = NULL`
+- [ ] `correlation_id` stored correctly when present in the event; `NULL` when absent
+- [ ] Event with an existing `event_id` is ignored without error (idempotency via `uk_ledger_entries__event_id`)
+- [ ] Application user `register_app` cannot execute UPDATE or DELETE on `ledger_entries`
+- [ ] Corrupted payload (invalid JSON, missing required fields, or invalid `data.data`) goes to `audit.events.deadletter` without blocking the consumer
+- [ ] Database failure results in NACK and reprocessing (no message loss)
+- [ ] `event_persisted` log emitted with correct fields for each write
+- [ ] Service resumes processing automatically after reconnection with the broker or database
+- [ ] Hash tree scan finds no inconsistencies after 1,000 concurrent inserts — each record has `previous_hash` equal to the `hash` of the record pointed to by `previous_id`
+- [ ] Build passes without **StyleCop** or **Roslynator** violations (build fails on any violation)
+- [ ] **SonarQube** quality gate passes on PR — coverage above the defined threshold, no new vulnerabilities or blocking code smells
+- [ ] k6 script validates P99 < 500ms under nominal load scenario; metrics exported and visible in Prometheus/Grafana
 
-## Cenários de Teste
+## Test Scenarios
 
 ```gherkin
-# language: pt
+# language: en
 
 @regression
-Feature: Processamento e persistência imutável de AuditEvents
-  Como serviço de registro do RavenLedger
-  Quero consumir eventos da fila e persistir cada um de forma imutável
-  Para garantir que o histórico de auditoria seja confiável e não possa ser adulterado
+Feature: AuditEvent processing and immutable persistence
+  As the RavenLedger registration service
+  I want to consume events from the queue and persist each one immutably
+  So that the audit history is reliable and cannot be tampered with
 
   Background:
-    Given que o broker Kafka está operacional com o tópico audit.events.received
-    And que o LedgerDatabase está acessível
-    And que a migration de criação do ledger_entries foi executada
+    Given the Kafka broker is operational with the audit.events.received topic
+    And LedgerDatabase is accessible
+    And the ledger_entries creation migration has been executed
 
-  # AC-1 e AC-2: Evento da fila persistido com mapeamento correto
+  # AC-1 and AC-2: Queue event persisted with correct mapping
   @happy-path @ac-1 @ac-2
-  Scenario: AuditEvent publicado na fila é persistido com todos os campos mapeados
-    Given que um AuditEvent válido foi publicado na fila audit.events.received
-    When o serviço de registro consome a mensagem
-    Then um registro é criado no LedgerDatabase com todos os campos do mapeamento CloudEvent corretamente populados
-    And o campo data_payload contém o objeto de negócio de data.data como JSONB
-    And o campo spec_version está preenchido com o valor do envelope CloudEvent
-    And o campo index_payload contém os campos customizados enviados em data.index
+  Scenario: AuditEvent published to the queue is persisted with all mapped fields
+    Given a valid AuditEvent was published to the audit.events.received queue
+    When the registration service consumes the message
+    Then a record is created in LedgerDatabase with all CloudEvent mapping fields correctly populated
+    And the data_payload field contains the business object from data.data as JSONB
+    And the spec_version field is populated with the value from the CloudEvent envelope
+    And the index_payload field contains the custom fields sent in data.index
 
-  # AC-6: Hash calculado corretamente
+  # AC-6: Hash correctly calculated
   @happy-path @ac-6
-  Scenario: Hash do registro é calculado a partir da concatenação canônica de todos os campos
-    Given que um AuditEvent válido foi publicado na fila
-    When o serviço de registro consome e persiste a mensagem
-    Then o campo hash do registro é o SHA-256 da concatenação canônica de todos os campos mapeados
-    And o cálculo usou o JSON bruto de data_payload e index_payload antes da conversão para JSONB
+  Scenario: Record hash is calculated from the canonical concatenation of all fields
+    Given a valid AuditEvent was published to the queue
+    When the registration service consumes and persists the message
+    Then the record's hash field is the SHA-256 of the canonical concatenation of all mapped fields
+    And the calculation used the raw JSON of data_payload and index_payload before conversion to JSONB
 
-  # AC-6: Cadeia de hash íntegra após múltiplas inserções concorrentes
+  # AC-6: Hash chain intact after multiple concurrent inserts
   @happy-path @ac-6
-  Scenario: Cadeia de hash permanece íntegra após inserções concorrentes
-    Given que 10 AuditEvents foram publicados e persistidos de forma concorrente
-    When a árvore de hashes é verificada percorrendo todos os caminhos do genesis até as folhas
-    Then o previous_hash de cada registro corresponde ao hash do registro apontado por previous_id
-    And o registro genesis possui previous_hash nulo e previous_id nulo
-    And bifurcações na cadeia são detectadas e não indicam adulteração
+  Scenario: Hash chain remains intact after concurrent inserts
+    Given 10 AuditEvents were published and persisted concurrently
+    When the hash tree is verified by traversing all paths from genesis to leaves
+    Then the previous_hash of each record matches the hash of the record pointed to by previous_id
+    And the genesis record has null previous_hash and null previous_id
+    And forks in the chain are detected and do not indicate tampering
 
-  # AC-4: Idempotência por event_id
+  # AC-4: Idempotency by event_id
   @happy-path @ac-4
-  Scenario: Evento com identificador duplicado é ignorado sem causar erro
-    Given que um evento com o identificador "evt-duplicado" já foi persistido no LedgerDatabase
-    When o mesmo evento é publicado novamente na fila
-    Then apenas um registro com esse identificador existe no LedgerDatabase
-    And nenhum erro é registrado no log
-    And o log event_duplicate_ignored é emitido com o event_id correspondente
+  Scenario: Event with duplicate identifier is ignored without causing an error
+    Given an event with the identifier "evt-duplicado" has already been persisted in LedgerDatabase
+    When the same event is published again to the queue
+    Then only one record with that identifier exists in LedgerDatabase
+    And no error is recorded in the log
+    And the event_duplicate_ignored log is emitted with the corresponding event_id
 
-  # AC-5: Imutabilidade — UPDATE bloqueado
+  # AC-5: Immutability — UPDATE blocked
   @exception @ac-5 @regression
-  Scenario: Tentativa de atualizar registro existente é rejeitada pelo banco
-    Given que um registro existe no LedgerDatabase
-    When o usuário de aplicação register_app tenta executar uma atualização nesse registro
-    Then a operação é negada pelo banco de dados com erro de permissão
+  Scenario: Attempt to update an existing record is rejected by the database
+    Given a record exists in LedgerDatabase
+    When the application user register_app attempts to execute an update on that record
+    Then the operation is denied by the database with a permission error
 
-  # AC-5: Imutabilidade — DELETE bloqueado
+  # AC-5: Immutability — DELETE blocked
   @exception @ac-5 @regression
-  Scenario: Tentativa de remover registro existente é rejeitada pelo banco
-    Given que um registro existe no LedgerDatabase
-    When o usuário de aplicação register_app tenta remover esse registro
-    Then a operação é negada pelo banco de dados com erro de permissão
+  Scenario: Attempt to remove an existing record is rejected by the database
+    Given a record exists in LedgerDatabase
+    When the application user register_app attempts to remove that record
+    Then the operation is denied by the database with a permission error
 
-  # AC-7: Payload corrompido vai para dead-letter
+  # AC-7: Corrupted payload goes to dead-letter
   @exception @ac-7
-  Scenario: Mensagem com JSON inválido é movida para dead-letter sem travar o consumer
-    Given que uma mensagem com conteúdo corrompido foi publicada na fila audit.events.received
-    When o serviço de registro tenta processar a mensagem
-    Then a mensagem é movida para a fila audit.events.deadletter
-    And o log event_dead_lettered é emitido com o motivo da rejeição
-    And o consumer continua processando as demais mensagens normalmente
+  Scenario: Message with invalid JSON is moved to dead-letter without blocking the consumer
+    Given a message with corrupted content was published to the audit.events.received queue
+    When the registration service attempts to process the message
+    Then the message is moved to the audit.events.deadletter queue
+    And the event_dead_lettered log is emitted with the rejection reason
+    And the consumer continues processing the remaining messages normally
 
-  # AC-7: data.data ausente vai para dead-letter
+  # AC-7: Missing data.data goes to dead-letter
   @exception @ac-7
-  Scenario: Mensagem sem o campo data.data é movida para dead-letter
-    Given que uma mensagem sem o campo data.data foi publicada na fila audit.events.received
-    When o serviço de registro tenta processar a mensagem
-    Then a mensagem é movida para a fila audit.events.deadletter
-    And o consumer continua processando as demais mensagens normalmente
+  Scenario: Message without the data.data field is moved to dead-letter
+    Given a message without the data.data field was published to the audit.events.received queue
+    When the registration service attempts to process the message
+    Then the message is moved to the audit.events.deadletter queue
+    And the consumer continues processing the remaining messages normally
 
-  # AC-7: Payload com campos obrigatórios ausentes vai para dead-letter
+  # AC-7: Payload with missing required fields goes to dead-letter
   @exception @ac-7
-  Scenario: Mensagem sem campo obrigatório é movida para dead-letter
-    Given que uma mensagem sem o campo event_id foi publicada na fila audit.events.received
-    When o serviço de registro tenta processar a mensagem
-    Then a mensagem é movida para a fila audit.events.deadletter
-    And o consumer continua processando as demais mensagens normalmente
+  Scenario: Message without a required field is moved to dead-letter
+    Given a message without the event_id field was published to the audit.events.received queue
+    When the registration service attempts to process the message
+    Then the message is moved to the audit.events.deadletter queue
+    And the consumer continues processing the remaining messages normally
 
-  # AC-8: Falha de banco resulta em reprocessamento sem perda de mensagem
+  # AC-8: Database failure results in reprocessing without message loss
   @exception @ac-8
-  Scenario: Falha temporária de conexão com o banco não causa perda de mensagem
-    Given que um evento válido está na fila para processamento
-    When o LedgerDatabase fica temporariamente indisponível durante o processamento
-    Then o evento retorna à fila sem ser descartado
-    And após a reconexão com o banco o evento é processado com sucesso
+  Scenario: Temporary database connection failure does not cause message loss
+    Given a valid event is in the queue for processing
+    When LedgerDatabase becomes temporarily unavailable during processing
+    Then the event returns to the queue without being discarded
+    And after reconnection with the database the event is processed successfully
 
-  # AC-9: Log de persistência
+  # AC-9: Persistence log
   @happy-path @ac-9
-  Scenario: Log estruturado emitido para cada evento persistido contém os campos esperados
-    Given que um AuditEvent válido foi consumido da fila
-    When o registro é criado no LedgerDatabase
-    Then o log event_persisted é emitido com event_id, entity, domain, operation_type e processing_time_ms
+  Scenario: Structured log emitted for each persisted event contains the expected fields
+    Given a valid AuditEvent was consumed from the queue
+    When the record is created in LedgerDatabase
+    Then the event_persisted log is emitted with event_id, entity, domain, operation_type, and processing_time_ms
 
-  # correlationId: campo armazenado quando presente
+  # correlationId: field stored when present
   @happy-path
-  Scenario: Evento com correlationId tem o campo armazenado corretamente no LedgerDatabase
-    Given que um AuditEvent com o campo correlationId "op-7263" foi publicado na fila
-    When o serviço de registro consome e persiste o evento
-    Then o registro no LedgerDatabase possui o campo correlation_id com o valor "op-7263"
+  Scenario: Event with correlationId has the field correctly stored in LedgerDatabase
+    Given an AuditEvent with the correlationId "op-7263" was published to the queue
+    When the registration service consumes and persists the event
+    Then the record in LedgerDatabase has the correlation_id field with the value "op-7263"
 
-  # correlationId: campo nulo quando ausente
+  # correlationId: field null when absent
   @happy-path
-  Scenario: Evento sem correlationId tem o campo armazenado como nulo no LedgerDatabase
-    Given que um AuditEvent sem o campo correlationId foi publicado na fila
-    When o serviço de registro consome e persiste o evento
-    Then o registro no LedgerDatabase possui o campo correlation_id com valor nulo
+  Scenario: Event without correlationId has the field stored as null in LedgerDatabase
+    Given an AuditEvent without the correlationId field was published to the queue
+    When the registration service consumes and persists the event
+    Then the record in LedgerDatabase has the correlation_id field with a null value
 ```
 
 ## Priority
@@ -542,10 +542,10 @@ Feature: Processamento e persistência imutável de AuditEvents
 
 ## Risk
 
-1 — Alto. O schema do `ledger_entries` é a estrutura de dados permanente do produto. Em tabela append-only com dados reais, qualquer migration que altere colunas existentes é uma operação de alto risco. Decisões de schema devem ser bem validadas antes do primeiro deploy com dados reais. A cadeia de hashes amplifica esse risco: uma mudança no algoritmo de hash ou nos campos incluídos no cálculo invalida toda a cadeia histórica.
+1 — High. The `ledger_entries` schema is the product's permanent data structure. In an append-only table with real data, any migration that alters existing columns is a high-risk operation. Schema decisions must be thoroughly validated before the first deploy with real data. The hash chain amplifies this risk: a change to the hash algorithm or to the fields included in the calculation invalidates the entire historical chain.
 
-O uso de `data_payload` como JSONB exige atenção especial na verificação da cadeia: a aplicação de auditoria precisa reproduzir o JSON bruto original (não o JSONB normalizado) para recalcular os hashes históricos.
+The use of `data_payload` as JSONB requires special attention during chain verification: the audit application needs to reproduce the original raw JSON (not the normalized JSONB) to recalculate historical hashes.
 
 ## Effort
 
-3 — M. A lógica de consumer Kafka com retry e dead-letter é bem documentada para Confluent.Kafka. O ponto de atenção é o advisory lock para serialização da cadeia de hashes — requer teste de concorrência cuidadoso mesmo no MVP. A gestão do JSON bruto para cálculo de hash (antes do parse para JSONB) requer cuidado na implementação do serviço.
+L. The Kafka consumer logic with retry and dead-letter is well documented for Confluent.Kafka. The key concern is the advisory lock for hash chain serialization — requires careful concurrency testing even in the MVP. Managing the raw JSON for hash calculation (before parsing to JSONB) requires care in the service implementation.

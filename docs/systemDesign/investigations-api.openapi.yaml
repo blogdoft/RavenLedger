@@ -1,0 +1,883 @@
+openapi: 3.0.3
+
+info:
+  title: RavenLedger — Investigations API
+  description: |
+    API de gerenciamento de investigações formais do RavenLedger. Permite que peritos
+    judiciais e analistas de compliance criem investigações, associem registros de auditoria
+    como evidências, adicionem anotações e gerenciem o ciclo de vida do caso investigativo.
+
+    Diferente da Audit Query API (somente-leitura), esta API expõe operações de escrita
+    (POST, PATCH, DELETE). Os dados de investigação são armazenados em um banco dedicado
+    (`investigations_db`) separado do LedgerDatabase de auditoria.
+
+    A referência entre `investigation_entries.ledger_entry_id` e `ledger_entries.id` é uma
+    chave estrangeira lógica (soft reference) — validada em tempo de requisição, sem FK
+    cruzada entre bancos.
+  version: 1.0.0
+  contact:
+    name: BlogDoFT / RavenLedger
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:5100
+    description: Local development
+  - url: https://api.ravenledger.internal
+    description: Cluster interno (K3D / ArgoCD)
+
+tags:
+  - name: Investigations
+    description: Abertura e gerenciamento de investigações formais
+  - name: Investigation Entries
+    description: Associação de registros de auditoria como evidências
+  - name: Investigation Notes
+    description: Anotações e comentários do investigador
+
+security:
+  - BearerAuth: []
+
+paths:
+  /api/v1/investigations:
+    get:
+      tags:
+        - Investigations
+      operationId: listInvestigations
+      summary: Lista investigações com filtro por status e paginação
+      description: |
+        Retorna uma lista paginada de investigações. O filtro `status` é opcional —
+        sem ele, todas as investigações são retornadas independentemente do status.
+
+        Resultado vazio com filtros válidos retorna `200 OK` com `items: []` — não é erro.
+      parameters:
+        - name: status
+          in: query
+          description: Filtra pelo status da investigação.
+          required: false
+          schema:
+            type: string
+            enum:
+              - open
+              - closed
+          example: open
+        - name: page
+          in: query
+          description: Número da página (base 1).
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          example: 1
+        - name: size
+          in: query
+          description: Quantidade de registros por página. Máximo de 100.
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          example: 20
+      responses:
+        "200":
+          description: Lista paginada de investigações. Pode ser vazia.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvestigationPage'
+              example:
+                items:
+                  - id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                    title: "Auditoria CRM Q1/2024"
+                    description: "Investigação de acessos não autorizados em janeiro de 2024."
+                    status: open
+                    created_by: "leticia.santos"
+                    created_at: "2024-02-01T09:00:00Z"
+                    closed_at: null
+                    closed_by: null
+                total: 1
+                page: 1
+                size: 20
+        "400":
+          description: Parâmetros de consulta inválidos (ex. `status` fora do domínio aceito).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+              example:
+                type: "https://ravenledger.internal/errors/validation"
+                title: "Validation failed"
+                status: 400
+                errors:
+                  - field: status
+                    message: "'status' must be one of: open, closed."
+        "401":
+          description: Token de autenticação ausente, inválido ou expirado.
+
+    post:
+      tags:
+        - Investigations
+      operationId: createInvestigation
+      summary: Abre uma nova investigação formal
+      description: |
+        Cria uma nova investigação com status inicial `open`. A investigação pode ser
+        criada sem registros de auditoria associados — o investigador pode populá-la
+        ao longo da análise.
+
+        No MVP, `created_by` é uma string livre (nome ou identificador do investigador).
+        Autenticação via KeyCloak é planejada para uma fase futura.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateInvestigationRequest'
+            example:
+              title: "Auditoria CRM Q1/2024"
+              description: "Investigação de acessos não autorizados identificados em janeiro de 2024."
+              created_by: "leticia.santos"
+      responses:
+        "201":
+          description: Investigação criada com sucesso com status `open`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Investigation'
+              example:
+                id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                title: "Auditoria CRM Q1/2024"
+                description: "Investigação de acessos não autorizados identificados em janeiro de 2024."
+                status: open
+                created_by: "leticia.santos"
+                created_at: "2024-02-01T09:00:00Z"
+                closed_at: null
+                closed_by: null
+        "400":
+          description: |
+            Dados inválidos. Possíveis causas:
+            - `title` ausente ou vazio
+            - `created_by` ausente ou vazio
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+              examples:
+                missing_title:
+                  summary: Título ausente
+                  value:
+                    type: "https://ravenledger.internal/errors/validation"
+                    title: "Validation failed"
+                    status: 400
+                    errors:
+                      - field: title
+                        message: "'title' is required and must not be empty."
+                missing_created_by:
+                  summary: Identificador do autor ausente
+                  value:
+                    type: "https://ravenledger.internal/errors/validation"
+                    title: "Validation failed"
+                    status: 400
+                    errors:
+                      - field: created_by
+                        message: "'created_by' is required and must not be empty."
+        "401":
+          description: Token de autenticação ausente, inválido ou expirado.
+
+  /api/v1/investigations/{id}:
+    get:
+      tags:
+        - Investigations
+      operationId: getInvestigation
+      summary: Retorna o detalhe completo de uma investigação
+      description: |
+        Retorna a investigação com todos os registros de auditoria associados como evidências
+        e todas as anotações do investigador, em ordem cronológica crescente de criação.
+      parameters:
+        - name: id
+          in: path
+          description: Identificador UUID da investigação.
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+      responses:
+        "200":
+          description: Detalhe completo da investigação com evidências e anotações.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvestigationDetail'
+              example:
+                id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                title: "Auditoria CRM Q1/2024"
+                description: "Investigação de acessos não autorizados em janeiro de 2024."
+                status: open
+                created_by: "leticia.santos"
+                created_at: "2024-02-01T09:00:00Z"
+                closed_at: null
+                closed_by: null
+                entries:
+                  - ledger_entry_id: "550e8400-e29b-41d4-a716-446655440000"
+                    added_by: "leticia.santos"
+                    added_at: "2024-02-01T09:15:00Z"
+                notes:
+                  - id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+                    content: "Acesso ocorreu fora do horário comercial."
+                    created_by: "leticia.santos"
+                    created_at: "2024-02-01T09:20:00Z"
+        "401":
+          description: Token de autenticação ausente, inválido ou expirado.
+        "404":
+          description: Investigação não encontrada para o identificador informado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: "https://ravenledger.internal/errors/not-found"
+                title: "Not Found"
+                status: 404
+                detail: "Investigation 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' was not found."
+
+  /api/v1/investigations/{id}/entries:
+    post:
+      tags:
+        - Investigation Entries
+      operationId: addInvestigationEntry
+      summary: Associa um registro de auditoria como evidência da investigação
+      description: |
+        Vincula um `ledger_entry_id` à investigação. O registro de auditoria deve existir
+        no LedgerDatabase — caso contrário, a requisição é rejeitada com `404`.
+
+        Associação em investigações com status `closed` é rejeitada com `409 Conflict`.
+        Para associar novos registros, reabra a investigação primeiro via
+        `PATCH /api/v1/investigations/{id}/status`.
+      parameters:
+        - name: id
+          in: path
+          description: Identificador UUID da investigação.
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddEntryRequest'
+            example:
+              ledger_entry_id: "550e8400-e29b-41d4-a716-446655440000"
+              added_by: "leticia.santos"
+      responses:
+        "201":
+          description: Registro de auditoria associado como evidência com sucesso.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvestigationEntry'
+              example:
+                investigation_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                ledger_entry_id: "550e8400-e29b-41d4-a716-446655440000"
+                added_by: "leticia.santos"
+                added_at: "2024-02-01T09:15:00Z"
+        "400":
+          description: Dados inválidos (ex. `ledger_entry_id` ausente).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+        "401":
+          description: Token de autenticação ausente, inválido ou expirado.
+        "404":
+          description: |
+            Investigação ou registro de auditoria não encontrado. O campo `detail`
+            indica qual dos dois recursos está ausente.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              examples:
+                investigation_not_found:
+                  summary: Investigação não encontrada
+                  value:
+                    type: "https://ravenledger.internal/errors/not-found"
+                    title: "Not Found"
+                    status: 404
+                    detail: "Investigation 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' was not found."
+                ledger_entry_not_found:
+                  summary: Registro de auditoria não encontrado
+                  value:
+                    type: "https://ravenledger.internal/errors/not-found"
+                    title: "Not Found"
+                    status: 404
+                    detail: "Ledger entry '550e8400-e29b-41d4-a716-446655440999' was not found."
+        "409":
+          description: Investigação está fechada — associação de novos registros não é permitida.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: "https://ravenledger.internal/errors/conflict"
+                title: "Conflict"
+                status: 409
+                detail: "Investigation 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' is closed. Reopen it before adding entries."
+
+  /api/v1/investigations/{id}/entries/{ledger_entry_id}:
+    delete:
+      tags:
+        - Investigation Entries
+      operationId: removeInvestigationEntry
+      summary: Remove a associação de um registro de auditoria da investigação
+      description: |
+        Desvincula o registro de auditoria identificado por `ledger_entry_id` da investigação.
+        A remoção só é permitida em investigações com status `open`.
+
+        Esta operação remove apenas a associação — o registro de auditoria no LedgerDatabase
+        permanece inalterado.
+      parameters:
+        - name: id
+          in: path
+          description: Identificador UUID da investigação.
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        - name: ledger_entry_id
+          in: path
+          description: Identificador UUID do registro de auditoria a ser desvinculado.
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        "204":
+          description: Associação removida com sucesso. Sem corpo na resposta.
+        "401":
+          description: Token de autenticação ausente, inválido ou expirado.
+        "404":
+          description: Investigação ou associação não encontrada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        "409":
+          description: Investigação está fechada — remoção de registros não é permitida.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: "https://ravenledger.internal/errors/conflict"
+                title: "Conflict"
+                status: 409
+                detail: "Investigation 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' is closed. Reopen it before removing entries."
+
+  /api/v1/investigations/{id}/notes:
+    post:
+      tags:
+        - Investigation Notes
+      operationId: addInvestigationNote
+      summary: Adiciona uma anotação à investigação
+      description: |
+        Registra uma anotação textual do investigador com timestamp e autoria.
+        As anotações são imutáveis após criação — não há endpoint de edição ou exclusão de notas.
+      parameters:
+        - name: id
+          in: path
+          description: Identificador UUID da investigação.
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddNoteRequest'
+            example:
+              content: "Acesso ocorreu fora do horário comercial. Necessário cruzar com log do IdP."
+              created_by: "leticia.santos"
+      responses:
+        "201":
+          description: Anotação criada com sucesso.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvestigationNote'
+              example:
+                id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+                investigation_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                content: "Acesso ocorreu fora do horário comercial. Necessário cruzar com log do IdP."
+                created_by: "leticia.santos"
+                created_at: "2024-02-01T09:20:00Z"
+        "400":
+          description: Dados inválidos (ex. `content` ou `created_by` ausentes).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+        "401":
+          description: Token de autenticação ausente, inválido ou expirado.
+        "404":
+          description: Investigação não encontrada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /api/v1/investigations/{id}/status:
+    patch:
+      tags:
+        - Investigations
+      operationId: updateInvestigationStatus
+      summary: Abre ou fecha uma investigação
+      description: |
+        Atualiza o status da investigação entre `open` e `closed`.
+
+        Ao fechar (`closed`): preenche `closed_at` com o timestamp atual e `closed_by` com o
+        valor informado em `changed_by`.
+
+        Ao reabrir (`open`): limpa `closed_at` e `closed_by`, permitindo associar novos
+        registros à investigação.
+      parameters:
+        - name: id
+          in: path
+          description: Identificador UUID da investigação.
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStatusRequest'
+            examples:
+              close_investigation:
+                summary: Fechar investigação
+                value:
+                  status: closed
+                  changed_by: "demarco.perito"
+              reopen_investigation:
+                summary: Reabrir investigação
+                value:
+                  status: open
+                  changed_by: "demarco.perito"
+      responses:
+        "200":
+          description: Status atualizado com sucesso. Retorna a investigação com o novo status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Investigation'
+              examples:
+                closed:
+                  summary: Investigação fechada
+                  value:
+                    id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                    title: "Auditoria CRM Q1/2024"
+                    description: "Investigação de acessos não autorizados em janeiro de 2024."
+                    status: closed
+                    created_by: "leticia.santos"
+                    created_at: "2024-02-01T09:00:00Z"
+                    closed_at: "2024-03-15T17:00:00Z"
+                    closed_by: "demarco.perito"
+                reopened:
+                  summary: Investigação reaberta
+                  value:
+                    id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                    title: "Auditoria CRM Q1/2024"
+                    description: "Investigação de acessos não autorizados em janeiro de 2024."
+                    status: open
+                    created_by: "leticia.santos"
+                    created_at: "2024-02-01T09:00:00Z"
+                    closed_at: null
+                    closed_by: null
+        "400":
+          description: |
+            Dados inválidos. Possíveis causas:
+            - `status` ausente ou fora do domínio (`open` | `closed`)
+            - `changed_by` ausente ou vazio
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+        "401":
+          description: Token de autenticação ausente, inválido ou expirado.
+        "404":
+          description: Investigação não encontrada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Token emitido pelo KeyCloak. Peritos e analistas de compliance obtêm o token
+        via fluxo interativo (Authorization Code).
+
+  schemas:
+
+    Investigation:
+      type: object
+      description: Investigação formal no RavenLedger.
+      required:
+        - id
+        - title
+        - status
+        - created_by
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Identificador único da investigação.
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        title:
+          type: string
+          description: Título descritivo da investigação.
+          example: "Auditoria CRM Q1/2024"
+        description:
+          type: string
+          nullable: true
+          description: Descrição opcional com o contexto da investigação.
+          example: "Investigação de acessos não autorizados em janeiro de 2024."
+        status:
+          type: string
+          description: Status atual da investigação.
+          enum:
+            - open
+            - closed
+          example: open
+        created_by:
+          type: string
+          description: Identificador ou nome do investigador que abriu o caso.
+          example: "leticia.santos"
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp de criação da investigação.
+          example: "2024-02-01T09:00:00Z"
+        closed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp de encerramento. `null` enquanto a investigação estiver aberta.
+          example: null
+        closed_by:
+          type: string
+          nullable: true
+          description: Identificador do investigador que fechou o caso. `null` enquanto aberta.
+          example: null
+
+    InvestigationSummary:
+      type: object
+      description: Resumo de uma investigação para uso em listagens.
+      required:
+        - id
+        - title
+        - status
+        - created_by
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        title:
+          type: string
+          example: "Auditoria CRM Q1/2024"
+        description:
+          type: string
+          nullable: true
+          example: "Investigação de acessos não autorizados em janeiro de 2024."
+        status:
+          type: string
+          enum:
+            - open
+            - closed
+          example: open
+        created_by:
+          type: string
+          example: "leticia.santos"
+        created_at:
+          type: string
+          format: date-time
+          example: "2024-02-01T09:00:00Z"
+        closed_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+        closed_by:
+          type: string
+          nullable: true
+          example: null
+
+    InvestigationPage:
+      type: object
+      description: Resultado paginado da listagem de investigações.
+      required:
+        - items
+        - total
+        - page
+        - size
+      properties:
+        items:
+          type: array
+          description: Investigações da página atual. Pode ser vazia.
+          items:
+            $ref: '#/components/schemas/InvestigationSummary'
+        total:
+          type: integer
+          description: Total de investigações que satisfazem os filtros aplicados.
+          example: 1
+        page:
+          type: integer
+          description: Número da página atual (base 1).
+          example: 1
+        size:
+          type: integer
+          description: Tamanho de página utilizado na consulta.
+          example: 20
+
+    InvestigationDetail:
+      description: Investigação completa com evidências associadas e anotações do investigador.
+      allOf:
+        - $ref: '#/components/schemas/Investigation'
+        - type: object
+          required:
+            - entries
+            - notes
+          properties:
+            entries:
+              type: array
+              description: Registros de auditoria associados como evidências, em ordem de associação.
+              items:
+                $ref: '#/components/schemas/InvestigationEntry'
+            notes:
+              type: array
+              description: Anotações do investigador em ordem cronológica crescente.
+              items:
+                $ref: '#/components/schemas/InvestigationNote'
+
+    InvestigationEntry:
+      type: object
+      description: Associação entre uma investigação e um registro de auditoria do LedgerDatabase.
+      required:
+        - investigation_id
+        - ledger_entry_id
+        - added_by
+        - added_at
+      properties:
+        investigation_id:
+          type: string
+          format: uuid
+          description: Identificador da investigação.
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        ledger_entry_id:
+          type: string
+          format: uuid
+          description: Identificador do registro no LedgerDatabase.
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        added_by:
+          type: string
+          description: Identificador do investigador que adicionou a evidência.
+          example: "leticia.santos"
+        added_at:
+          type: string
+          format: date-time
+          description: Timestamp de quando a evidência foi associada à investigação.
+          example: "2024-02-01T09:15:00Z"
+
+    InvestigationNote:
+      type: object
+      description: Anotação textual do investigador associada a uma investigação.
+      required:
+        - id
+        - investigation_id
+        - content
+        - created_by
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Identificador único da anotação.
+          example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+        investigation_id:
+          type: string
+          format: uuid
+          description: Identificador da investigação à qual a anotação pertence.
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        content:
+          type: string
+          description: Texto da anotação.
+          example: "Acesso ocorreu fora do horário comercial. Necessário cruzar com log do IdP."
+        created_by:
+          type: string
+          description: Identificador do investigador que criou a anotação.
+          example: "leticia.santos"
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp de criação da anotação.
+          example: "2024-02-01T09:20:00Z"
+
+    CreateInvestigationRequest:
+      type: object
+      description: Dados para abertura de uma nova investigação.
+      required:
+        - title
+        - created_by
+      properties:
+        title:
+          type: string
+          description: Título descritivo da investigação. Obrigatório e não vazio.
+          minLength: 1
+          maxLength: 255
+          example: "Auditoria CRM Q1/2024"
+        description:
+          type: string
+          description: Contexto ou objetivo da investigação (opcional).
+          example: "Investigação de acessos não autorizados identificados em janeiro de 2024."
+        created_by:
+          type: string
+          description: Identificador ou nome do investigador responsável pela abertura do caso.
+          minLength: 1
+          example: "leticia.santos"
+
+    AddEntryRequest:
+      type: object
+      description: Dados para associar um registro de auditoria como evidência.
+      required:
+        - ledger_entry_id
+        - added_by
+      properties:
+        ledger_entry_id:
+          type: string
+          format: uuid
+          description: Identificador UUID do registro no LedgerDatabase a ser associado.
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        added_by:
+          type: string
+          description: Identificador do investigador que está adicionando a evidência.
+          minLength: 1
+          example: "leticia.santos"
+
+    AddNoteRequest:
+      type: object
+      description: Dados para adicionar uma anotação à investigação.
+      required:
+        - content
+        - created_by
+      properties:
+        content:
+          type: string
+          description: Texto da anotação. Obrigatório e não vazio.
+          minLength: 1
+          example: "Acesso ocorreu fora do horário comercial. Necessário cruzar com log do IdP."
+        created_by:
+          type: string
+          description: Identificador do investigador que está registrando a anotação.
+          minLength: 1
+          example: "leticia.santos"
+
+    UpdateStatusRequest:
+      type: object
+      description: Dados para atualizar o status de uma investigação.
+      required:
+        - status
+        - changed_by
+      properties:
+        status:
+          type: string
+          description: Novo status da investigação.
+          enum:
+            - open
+            - closed
+          example: closed
+        changed_by:
+          type: string
+          description: Identificador do investigador responsável pela mudança de status.
+          minLength: 1
+          example: "demarco.perito"
+
+    ValidationErrorResponse:
+      type: object
+      description: Resposta de erro de validação (RFC 7807 — Problem Details).
+      required:
+        - type
+        - title
+        - status
+        - errors
+      properties:
+        type:
+          type: string
+          description: URI que identifica o tipo de erro.
+          example: "https://ravenledger.internal/errors/validation"
+        title:
+          type: string
+          example: "Validation failed"
+        status:
+          type: integer
+          example: 400
+        errors:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ValidationError'
+
+    ValidationError:
+      type: object
+      description: Detalhe de um campo inválido ou ausente.
+      required:
+        - field
+        - message
+      properties:
+        field:
+          type: string
+          description: Nome do campo com erro.
+          example: "title"
+        message:
+          type: string
+          description: Descrição legível do motivo da rejeição.
+          example: "'title' is required and must not be empty."
+
+    ProblemDetails:
+      type: object
+      description: Resposta de erro genérica (RFC 7807 — Problem Details).
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          example: "https://ravenledger.internal/errors/not-found"
+        title:
+          type: string
+          example: "Not Found"
+        status:
+          type: integer
+          example: 404
+        detail:
+          type: string
+          description: Explicação legível do erro para uso em diagnóstico.
+          example: "Investigation 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' was not found."

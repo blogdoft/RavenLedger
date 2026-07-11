@@ -1,50 +1,50 @@
-# [FEATURE] FT-04 — API de Consulta da Trilha de Auditoria (API Service)
+# [FEATURE] FT-04 — Audit Trail Query API (API Service)
 
-## Descrição
+## Description
 
-**Wave 1 — MVP | Lean Inception: Trilha de Auditoria**
+**Wave 1 — MVP | Lean Inception: Audit Trail**
 
-Esta feature implementa o serviço `raven-ledger.api`, responsável por expor os registros do LedgerDatabase via API REST de somente-leitura. Permite que Letícia (compliance) e De Marco (perito judicial) consultem a trilha de auditoria com filtros por entidade, período, usuário e tipo de operação, obtendo a lista de registros e o detalhe de cada um.
+This feature implements the `raven-ledger.api` service, responsible for exposing LedgerDatabase records via a read-only REST API. It allows Letícia (compliance) and De Marco (judicial expert) to query the audit trail with filters by entity, period, user, and operation type, retrieving the record list and the detail of each one.
 
-Este serviço é a interface programática do produto: ele serve tanto a aplicação web (FT-05) quanto integrações diretas por parte de peritos técnicos.
+This service is the product's programmatic interface: it serves both the web application (FT-05) and direct integrations by technical experts.
 
-**Cenários de negócio:**
-- **Happy path:** Perito filtra por entidade "users" e período → lista paginada de registros retornada em < 200ms.
-- **Registro específico:** Acesso direto por ID → detalhe completo incluindo snapshot `data`.
-- **Sem resultados:** Filtros não encontram registros → `200 OK` com lista vazia (não é erro).
-- **Filtro inválido:** `from` posterior a `to` → `400 Bad Request` com mensagem descritiva.
-- **ID inexistente:** `GET /audit-entries/{id}` com ID inválido → `404 Not Found`.
+**Business scenarios:**
+- **Happy path:** Expert filters by entity "users" and period → paginated list of records returned in < 200ms.
+- **Specific record:** Direct access by ID → full detail including the `data` snapshot.
+- **No results:** Filters find no records → `200 OK` with empty list (not an error).
+- **Invalid filter:** `from` later than `to` → `400 Bad Request` with descriptive message.
+- **Non-existent ID:** `GET /audit-entries/{id}` with invalid ID → `404 Not Found`.
 
-**Indicadores de sucesso:** Permite que Letícia execute uma trilha de auditoria completa sem precisar acessar o banco diretamente — eliminando a dependência de DBA para investigações de rotina.
+**Success indicators:** Allows Letícia to run a complete audit trail without needing direct database access — eliminating the DBA dependency for routine investigations.
 
-## Descrição Técnica
+## Technical Description
 
-**Serviço:** `raven-ledger.api` (WebAPI somente-leitura)
+**Service:** `raven-ledger.api` (read-only WebAPI)
 
-**Contrato:** `docs/systemDesign/audit-api.openapi.yaml`
+**Contract:** `docs/systemDesign/audit-api.openapi.yaml`
 
 **Endpoints:**
 
 ```
 GET /api/v1/audit-entries
   Query params:
-    entity       (string, opcional)
-    domain       (string, opcional)
-    user_id      (string, opcional)
-    operation    (string, opcional) — insert | update | delete
-    from         (ISO 8601, opcional) — filtro em received_at
-    to           (ISO 8601, opcional) — filtro em received_at
-    correlation_id (string, opcional) — filtra por identificador de operação distribuída
+    entity       (string, optional)
+    domain       (string, optional)
+    user_id      (string, optional)
+    operation    (string, optional) — insert | update | delete
+    from         (ISO 8601, optional) — filter on received_at
+    to           (ISO 8601, optional) — filter on received_at
+    correlation_id (string, optional) — filters by distributed operation identifier
     page         (int, default 1)
     size         (int, default 20, max 100)
-  Resposta: { items: [...], total: int, page: int, size: int }
+  Response: { items: [...], total: int, page: int, size: int }
 
 GET /api/v1/audit-entries/{id}
-  Resposta: objeto completo do ledger_entry, incluindo data snapshot
-  404 se não encontrado
+  Response: full ledger_entry object, including data snapshot
+  404 if not found
 ```
 
-**Modelo de resposta (item da lista):**
+**Response model (list item):**
 ```json
 {
   "id": "uuid",
@@ -63,153 +63,153 @@ GET /api/v1/audit-entries/{id}
 }
 ```
 
-**Modelo de resposta (detalhe):** todos os campos acima + `data` (snapshot do `raw_payload.data`).
+**Response model (detail):** all fields above + `data` (snapshot from `raw_payload.data`).
 
-**Validações:**
-- `from` e `to` devem ser ISO 8601 válidos
-- Se ambos presentes: `from` ≤ `to`
-- `operation` deve ser um de `insert`, `update`, `delete`
-- `size` máximo de 100
+**Validations:**
+- `from` and `to` must be valid ISO 8601
+- If both present: `from` ≤ `to`
+- `operation` must be one of `insert`, `update`, `delete`
+- `size` maximum of 100
 
-**Performance:** Queries usam os índices criados na FT-01. Para `size` padrão (20), P99 < 200ms.
+**Performance:** Queries use the indexes created in FT-01. For the default `size` (20), P99 < 200ms.
 
-**Serviço é puramente de leitura:** Nenhum endpoint de escrita. Usuário de banco possui apenas `SELECT`.
+**Service is purely read-only:** No write endpoints. Database user has only `SELECT`.
 
-**Logs estruturados:**
-- `audit_query` → filtros aplicados, `result_count`, `latency_ms`
+**Structured logs:**
+- `audit_query` → applied filters, `result_count`, `latency_ms`
 - `audit_entry_viewed` → `entry_id`, `latency_ms`
 
-**Métricas de estabilidade:**
-- Latência P99 < 200ms para queries com até 1M de registros no banco
-- Disponibilidade > 99,9%
+**Stability metrics:**
+- P99 latency < 200ms for queries with up to 1M records in the database
+- Availability > 99.9%
 
-## Critérios de Aceite
+## Acceptance Criteria
 
-- [ ] `GET /api/v1/audit-entries` retorna lista paginada com filtros funcionando individualmente e combinados
-- [ ] `GET /api/v1/audit-entries/{id}` retorna registro completo com campo `data` (snapshot)
-- [ ] ID inexistente retorna `404 Not Found`
-- [ ] Filtro `from` posterior a `to` retorna `400 Bad Request`
-- [ ] Paginação funciona: `page` e `size` controlam o resultado, `total` reflete o total de registros
-- [ ] Resposta P99 < 200ms em banco com até 100.000 registros
-- [ ] Nenhum endpoint de escrita exposto
-- [ ] Usuário de banco de dados da aplicação possui apenas permissão `SELECT`
-- [ ] Log `audit_query` emitido com filtros utilizados
-- [ ] `GET /api/v1/audit-entries?correlation_id=X` retorna apenas registros com esse `correlationId`
-- [ ] Campo `correlationId` presente no modelo de resposta (nulo quando ausente no registro)
+- [ ] `GET /api/v1/audit-entries` returns a paginated list with filters working individually and combined
+- [ ] `GET /api/v1/audit-entries/{id}` returns the full record with `data` field (snapshot)
+- [ ] Non-existent ID returns `404 Not Found`
+- [ ] Filter `from` later than `to` returns `400 Bad Request`
+- [ ] Pagination works: `page` and `size` control the result, `total` reflects the total number of records
+- [ ] P99 response < 200ms on a database with up to 100,000 records
+- [ ] No write endpoints exposed
+- [ ] Application database user has only `SELECT` permission
+- [ ] `audit_query` log emitted with filters used
+- [ ] `GET /api/v1/audit-entries?correlation_id=X` returns only records with that `correlationId`
+- [ ] `correlationId` field present in the response model (null when absent from the record)
 
-## Cenários de Teste
+## Test Scenarios
 
 ```gherkin
-# language: pt
+# language: en
 
 @regression
-Feature: API de consulta da trilha de auditoria
-  Como perito ou analista de compliance
-  Quero consultar registros de auditoria com filtros flexíveis
-  Para investigar trilhas de operações sem precisar acessar o banco diretamente
+Feature: Audit trail query API
+  As an expert or compliance analyst
+  I want to query audit records with flexible filters
+  So that I can investigate operation trails without needing direct database access
 
   Background:
-    Given que o LedgerDatabase contém registros de auditoria
-    And que o usuário está autenticado na API
+    Given LedgerDatabase contains audit records
+    And the user is authenticated in the API
 
-  # AC-1: Filtros individuais funcionando
+  # AC-1: Individual filters working
   @happy-path @ac-1
-  Scenario Outline: Consulta com filtro individual retorna apenas registros correspondentes
-    Given que existem registros com "<campo>" igual a "<valor>" e registros com outros valores
-    When o perito consulta a trilha filtrando "<campo>" pelo valor "<valor>"
-    Then apenas os registros que correspondem ao filtro são retornados
+  Scenario Outline: Query with individual filter returns only matching records
+    Given there are records with "<field>" equal to "<value>" and records with other values
+    When the expert queries the trail filtering "<field>" by value "<value>"
+    Then only the records matching the filter are returned
 
     Examples:
-      | campo     | valor   |
+      | field     | value   |
       | entity    | users   |
       | domain    | sales   |
       | user_id   | usr-123 |
       | operation | delete  |
 
-  # AC-1: Filtros combinados
+  # AC-1: Combined filters
   @happy-path @ac-1
-  Scenario: Consulta com múltiplos filtros retorna a interseção dos critérios
-    Given que existem registros de entidade "orders" com operação "update" e registros com outras combinações
-    When o perito consulta filtrando por entidade "orders" e operação "update"
-    Then apenas os registros que satisfazem ambos os filtros são retornados
+  Scenario: Query with multiple filters returns the intersection of criteria
+    Given there are records for entity "orders" with operation "update" and records with other combinations
+    When the expert queries filtering by entity "orders" and operation "update"
+    Then only the records satisfying both filters are returned
 
-  # AC-1: Filtro por período
+  # AC-1: Period filter
   @happy-path @ac-1
-  Scenario: Consulta com filtro de período retorna apenas registros dentro do intervalo
-    Given que existem registros com datas dentro e fora do período de 2024-01-01 a 2024-01-31
-    When o perito consulta a trilha filtrando pelo período de 2024-01-01 a 2024-01-31
-    Then apenas os registros recebidos dentro do período são retornados
+  Scenario: Query with period filter returns only records within the range
+    Given there are records with dates inside and outside the period 2024-01-01 to 2024-01-31
+    When the expert queries the trail filtering by the period 2024-01-01 to 2024-01-31
+    Then only the records received within the period are returned
 
-  # AC-2: Detalhe de registro específico
+  # AC-2: Specific record detail
   @happy-path @ac-2
-  Scenario: Consulta por identificador retorna detalhe completo com snapshot de dados
-    Given que existe um registro com um identificador conhecido
-    When o perito consulta o detalhe do registro por esse identificador
-    Then o registro completo é retornado incluindo o snapshot dos dados da operação original
+  Scenario: Query by identifier returns full detail with data snapshot
+    Given there is a record with a known identifier
+    When the expert queries the record detail by that identifier
+    Then the full record is returned including the snapshot of the original operation data
 
-  # AC-3: Registro inexistente
+  # AC-3: Non-existent record
   @exception @ac-3
-  Scenario: Consulta de registro com identificador inexistente informa que não foi encontrado
-    Given que nenhum registro possui o identificador "id-que-nao-existe"
-    When o perito consulta o detalhe por esse identificador
-    Then o serviço informa que o registro não foi encontrado
+  Scenario: Query for a record with a non-existent identifier informs that it was not found
+    Given no record has the identifier "id-que-nao-existe"
+    When the expert queries the detail by that identifier
+    Then the service informs that the record was not found
 
-  # AC-4: Período inválido
+  # AC-4: Invalid period
   @exception @ac-4
-  Scenario: Período com data inicial posterior à data final é rejeitado
-    Given que o perito informa data inicial 2024-02-01 e data final 2024-01-01
-    When o perito solicita a consulta da trilha
-    Then o serviço rejeita a requisição informando que o período é inválido
+  Scenario: Period with start date later than end date is rejected
+    Given the expert provides start date 2024-02-01 and end date 2024-01-01
+    When the expert requests the trail query
+    Then the service rejects the request informing that the period is invalid
 
-  # AC-5: Paginação
+  # AC-5: Pagination
   @happy-path @ac-5
-  Scenario: Paginação controla quantidade e posição dos resultados retornados
-    Given que existem 50 registros no LedgerDatabase
-    When o perito consulta a segunda página com tamanho de 10 registros
-    Then são retornados 10 registros correspondentes à segunda página
-    And o total reflete o número real de registros disponíveis
+  Scenario: Pagination controls the quantity and position of returned results
+    Given there are 50 records in LedgerDatabase
+    When the expert queries the second page with a size of 10 records
+    Then 10 records corresponding to the second page are returned
+    And the total reflects the actual number of available records
 
-  # AC-5: Tamanho de página acima do limite
+  # AC-5: Page size above the limit
   @boundary @ac-5
-  Scenario: Tamanho de página acima do limite máximo é rejeitado
-    Given que o perito solicita 200 registros por página
-    When a consulta é realizada
-    Then o serviço rejeita a requisição informando que o tamanho excede o máximo permitido
+  Scenario: Page size above the maximum limit is rejected
+    Given the expert requests 200 records per page
+    When the query is performed
+    Then the service rejects the request informing that the size exceeds the maximum allowed
 
-  # AC-1: Consulta sem filtros retorna primeira página com total correto
+  # AC-1: Query without filters returns first page with correct total
   @happy-path @ac-1 @ac-5
-  Scenario: Consulta sem filtros retorna a primeira página com o total de registros
-    Given que existem registros de auditoria no LedgerDatabase
-    When o perito consulta a trilha sem nenhum filtro
-    Then os primeiros 20 registros são retornados com o total de registros correto
+  Scenario: Query without filters returns the first page with the record total
+    Given there are audit records in LedgerDatabase
+    When the expert queries the trail without any filter
+    Then the first 20 records are returned with the correct total record count
 
   # AC-6: Performance
   @boundary @ac-6
-  Scenario: Consulta com filtro padrão responde dentro do limite de latência
-    Given que o LedgerDatabase contém 100.000 registros
-    When o perito realiza uma consulta com tamanho de página padrão
-    Then a resposta é entregue em menos de 200 milissegundos
+  Scenario: Query with default filter responds within the latency limit
+    Given LedgerDatabase contains 100,000 records
+    When the expert performs a query with the default page size
+    Then the response is delivered in less than 200 milliseconds
 
-  # AC-7: Serviço somente-leitura
+  # AC-7: Read-only service
   @exception @ac-7
-  Scenario: Tentativa de escrita via método HTTP não permitido é rejeitada
-    Given que o perito tenta realizar uma operação de escrita via HTTP
-    When a requisição é enviada ao serviço
-    Then o serviço rejeita informando que o método não é permitido
+  Scenario: Attempt to write via a disallowed HTTP method is rejected
+    Given the expert attempts a write operation via HTTP
+    When the request is sent to the service
+    Then the service rejects informing that the method is not allowed
 
-  # AC-8: Permissão de leitura no banco
+  # AC-8: Read permission in the database
   @happy-path @ac-8
-  Scenario: Usuário de aplicação da API não possui permissão de modificação no banco
-    Given que o serviço está conectado ao LedgerDatabase com seu usuário de aplicação
-    When uma tentativa de modificação de registro é executada com esse usuário
-    Then a operação é negada pelo banco de dados
+  Scenario: API application user does not have modification permission in the database
+    Given the service is connected to LedgerDatabase with its application user
+    When a record modification attempt is executed with that user
+    Then the operation is denied by the database
 
-  # correlationId: filtro por operação distribuída
+  # correlationId: filter by distributed operation
   @happy-path
-  Scenario: Filtro por correlationId retorna apenas registros da mesma operação distribuída
-    Given que existem registros com correlationId "op-7263" e registros com outro correlationId ou sem correlationId
-    When o perito consulta a trilha filtrando por correlationId "op-7263"
-    Then apenas os registros com correlationId "op-7263" são retornados
+  Scenario: Filter by correlationId returns only records from the same distributed operation
+    Given there are records with correlationId "op-7263" and records with a different correlationId or without correlationId
+    When the expert queries the trail filtering by correlationId "op-7263"
+    Then only the records with correlationId "op-7263" are returned
 ```
 
 ## Priority
@@ -218,8 +218,8 @@ Feature: API de consulta da trilha de auditoria
 
 ## Risk
 
-2 — Médio. O modelo de resposta da API define o contrato com a interface web (FT-05) e com integrações externas. Mudanças de quebra de contrato após a FT-05 ser implementada exigem versionamento ou coordenação de deploy.
+2 — Medium. The API response model defines the contract with the web interface (FT-05) and with external integrations. Breaking contract changes after FT-05 is implemented require versioning or coordinated deployment.
 
 ## Effort
 
-2 — P
+S
